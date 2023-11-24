@@ -1,29 +1,33 @@
 ---
-title: "Controls Analysis after Batch correction"
-author: "Giacomo Antonello"
-date: "2022/08/02"
+title: "Smoking and salivary microbiota: a cross-sectional analysis of an Italian alpine population" 
+subtitle: "Controls Analysis"
+author: 
+  - Giacomo Antonello,
+  - Freida Blostein,
+  - Deesha Bhaumik,
+  - Elyse Davis,
+  - Martin Gögele,
+  - Roberto Melotti,
+  - Peter Pramstaller,
+  - Cristian Pattaro,
+  - Nicola Segata,
+  - Betsy Foxman,
+  - Christian Fuchsberger
+date: "`r Sys.Date()`"
 output:
-  rmdformats::readthedown:
-    self_contained: true
-    toc_float: true
-    code_folding: hide
-    number_sections: true
-    thumbnails: false
-    lightbox: true
-    gallery: false
-    highlight: haddock
+  pdf_document:
+    toc: true
+    toc_depth: 2
 ---
 
-# Libraries & custom functions
-
-```{r}
+```{r, echo=FALSE}
 
 knitr::opts_chunk$set(
   cache = FALSE,
   concordance = TRUE,
   prompt = TRUE, # fig.width=5, fig.height=5,
   out.width = "100%",
-  echo = TRUE,
+  echo = FALSE,
   warning = FALSE,
   message = FALSE,
   error = TRUE,
@@ -46,6 +50,7 @@ library(gautils)
 library(magrittr)
 library(ggpubr)
 library(kableExtra)
+library(microViz)
 
 # Load control samples data
 # not working yet, need to transfer from local to server
@@ -68,155 +73,130 @@ if(samples_order_identical & ASVs_order_identical){
   stop("Rownames or colnames of phyloseq component tables do not match")
 }
 
+phy_only_ctrls %<>% mutate_sample_data(Control_Type = case_when(ctrl_type == "DNA_extraction_ctrl" ~ "DNA extraction (Neg)",
+                                                                  ctrl_type == "water_ctrl" ~ "Water (Neg)",
+                                                                  ctrl_type == "zymo_pos" ~ "Zymo Mock (Pos)",
+                                                                  TRUE ~ NA))
 
-
+table(paste("B.", phy_only_ctrls@sam_data$batch), phy_only_ctrls@sam_data$Control_Type) %>% 
+  kbl(format = "latex", caption = "Number of samples per control type (columns) in each sequencing batch (rows)") %>% 
+  kable_styling(latex_options = "HOLD_position") %>% 
+  row_spec(0, bold = T)
+  
 ```
 
-# Beta diversity
+# PCoA (Beta diversity) split by controls
 
-```{r, fig.width = 12, fig.height=12}
+```{r,fig.width=8.5, fig.height=9}
 # all 
 theme_set(theme_light())
+
 phy_only_ctrls_nonZero <- subset_samples(phy_only_ctrls, counts_per_sample > 0)
 phy_only_ctrls_nonZero <- subset_taxa(phy_only_ctrls_nonZero, taxa_sums(phy_only_ctrls_nonZero) > 0)
 
-ord <- ordinate(microbiome::transform(phy_only_ctrls_nonZero, "compositional"), method = "PCoA", distance = "bray")
+distance_all <- phyloseq::distance(phy_only_ctrls_nonZero %>% phy_transform("compositional"), method = "bray")
 
-basic_plot <- plot_ordination(physeq = phy_only_ctrls_nonZero,
-                ordination = ord,
-                color = "ctrl_type"
-                )
-
-pcoa_ctrls_final_all <- basic_plot + ggforce::geom_mark_ellipse(aes(group= ctrl_type, colour = ctrl_type, label = ctrl_type)) + ggtitle("All controls")
+basic_plot_all <- phy_betaPlot(phy_only_ctrls_nonZero,dist = distance_all, method = "PCoA", color = "Control_Type", palette = "jco", visual_grouping = "ellipses")+ labs(title = "All controls", color = "Control Type")
+  
 
 # only zymo
 phy_only_ctrls_nonZero <- subset_samples(phy_only_ctrls, counts_per_sample > 0 & ctrl_type == "zymo_pos")
 phy_only_ctrls_nonZero <- subset_taxa(phy_only_ctrls_nonZero, taxa_sums(phy_only_ctrls_nonZero) > 0)
 
-ord <- ordinate(microbiome::transform(phy_only_ctrls_nonZero, "compositional"), method = "PCoA", distance = "bray")
-
-basic_plot <- plot_ordination(physeq = phy_only_ctrls_nonZero,
-                ordination = ord,
-                color = "batch"
-                )
-
-pcoa_ctrls_final_zymo <- basic_plot + ggforce::geom_mark_ellipse(aes(group= batch, colour = batch, label = batch)) + ggtitle("Zymo")
+basic_plot_zymo <- phy_betaPlot(phy_only_ctrls_nonZero,dist = distance_all, method = "PCoA", color = "batch", palette = "futurama", visual_grouping = "ellipses")+ labs(title = "Zymo", color = "Sequencing Batch")
 
 # only extr ctrl
 
 phy_only_ctrls_nonZero <- subset_samples(phy_only_ctrls, counts_per_sample > 0 & ctrl_type == "DNA_extraction_ctrl")
 phy_only_ctrls_nonZero <- subset_taxa(phy_only_ctrls_nonZero, taxa_sums(phy_only_ctrls_nonZero) > 0)
 
-ord <- ordinate(microbiome::transform(phy_only_ctrls_nonZero, "compositional"), method = "PCoA", distance = "bray")
-
-basic_plot <- plot_ordination(physeq = phy_only_ctrls_nonZero,
-                ordination = ord,
-                color = "batch"
-                )
-
-pcoa_ctrls_final_DNA_extr <- basic_plot + ggforce::geom_mark_ellipse(aes(group= batch, colour = batch, label = batch)) + ggtitle("DNA Extraction controls")
+basic_plot_DNA_extr <- phy_betaPlot(phy_only_ctrls_nonZero,dist = distance_all, method = "PCoA", color = "batch", palette = "futurama", visual_grouping = "ellipses")+ labs(title = "DNA extr. Control", color = "Sequencing Batch")
 
 # only water ctrl
-
 
 phy_only_ctrls_nonZero <- subset_samples(phy_only_ctrls, counts_per_sample > 0 & ctrl_type == "water_ctrl")
 phy_only_ctrls_nonZero <- subset_taxa(phy_only_ctrls_nonZero, taxa_sums(phy_only_ctrls_nonZero) > 0)
 
-ord <- ordinate(microbiome::transform(phy_only_ctrls_nonZero, "compositional"), method = "PCoA", distance = "bray")
-
-basic_plot <- plot_ordination(physeq = phy_only_ctrls_nonZero,
-                ordination = ord,
-                color = "batch"
-                )
-
-pcoa_ctrls_final_water <- basic_plot + ggforce::geom_mark_ellipse(aes(group= batch, colour = batch, label = batch)) + ggtitle("Water controls")
+basic_plot_water_neg <- phy_betaPlot(phy_only_ctrls_nonZero,dist = distance_all, method = "PCoA", color = "batch", palette = "futurama", visual_grouping = "ellipses")+ labs(title = "DNA extr. Control", color = "Sequencing Batch")
 
 
-ggsave(filename = "pcoa_bray_controls.png", height = 8, width = 10, dpi = 300, 
-       plot = ggpubr::ggarrange(pcoa_ctrls_final_all, ggpubr::ggarrange(pcoa_ctrls_final_zymo,pcoa_ctrls_final_DNA_extr,pcoa_ctrls_final_water, nrow = 1, ncol = 3, common.legend = TRUE, legend = "top"), nrow = 2, ncol = 1, heights = c(0.8,1))
-       )
-
-ggpubr::ggarrange(pcoa_ctrls_final_all, ggpubr::ggarrange(pcoa_ctrls_final_zymo,pcoa_ctrls_final_DNA_extr,pcoa_ctrls_final_water, nrow = 1, ncol = 3, common.legend = TRUE, legend = "top"), nrow = 2, ncol = 1, heights = c(0.8,1))
+ggpubr::ggarrange(basic_plot_zymo, basic_plot_DNA_extr,basic_plot_water_neg, basic_plot_all,
+                  
+                  nrow = 2, ncol = 2, common.legend = TRUE, legend = "top", labels = "AUTO")
 
 ```
 
-# Zymo controls
+**Figure 1. Bray-Curtis distance based Principal Coordinate Analysis plots of Controls** (A) Zymo Mock community positive control. (B) Water extraction control. (C) DNA Extraction Control. The **legend on top** of the table refers to panels **A-C only** (D) Same visualization, but all control types were included, which induced a clear separation between negative and Zymo positive controls. The Bray-Curtis distance was calculated on the whole data set at first, then subset every time to keep only available samples. This was done to induce further separation based also on the taxa unique to the Zymo and the negative controls. 
 
-## Heatmap by ASV {.tabset}
+# Zymo Mock communities composition (Positive Controls)
 
-### All batches
+## Heatmap by ASV
 
-```{r}
-phy_ctrls_zymo <- subset_samples(phy_only_ctrls, ctrl_type == "zymo_pos")
-phy_ctrls_zymo <- subset_taxa(phy_ctrls_zymo, taxa_sums(phy_ctrls_zymo)/(sum(taxa_sums(phy_ctrls_zymo)))*100 > 0.1)
+```{r, fig.height=8, fig.width=8}
+# Only Batches containing our study's samples
 
-
-
-plot_all_batches <- phy_ctrls_zymo %>% 
-  abundances("compositional") %>% 
-  pheatmap::pheatmap(scale = "none", annotation_col = select(meta(phy_ctrls_zymo), batch))
-```
-
-### CHRISMB-only batches
-
-```{r}
-
-phy_ctrls_zymo_chrismb <- filter_sample_data(phy_ctrls_zymo, batch %in% as.character(c(1:5, 7)))
-phy_ctrls_zymo_chrismb <- subset_taxa(phy_ctrls_zymo_chrismb, taxa_sums(phy_ctrls_zymo_chrismb)>0)
+phy_ctrls_zymo_chrismb <- phy_only_ctrls %>% 
+  filter_sample_data(
+    ctrl_type == "zymo_pos",
+    batch %in% as.character(c(1:5, 7))
+    ) %>% 
+  phy_pruneTaxa()
 
 plot_chrismb_batches <- phy_ctrls_zymo_chrismb %>% 
   abundances("compositional") %>% 
-  pheatmap::pheatmap(scale = "none", annotation_col = select(meta(phy_ctrls_zymo), batch))
+  pheatmap::pheatmap(scale = "none", annotation_col = dplyr::select(meta(phy_ctrls_zymo_chrismb), batch) %>% mutate(batch = paste("B.", batch)))
 
 ```
 
-Batch 4 has enough clustering to deserve some attention, let's keep it in mind
+**Figure 2. Heatmap of the relative abundance taxonomic composition at ASV level of Zymo Mock communities** No scaling except the relative abundance transformation was applied to the ASVs. Clustering was performed on both rows and columns. Columns were annotated by sequencing batch.
 
-### PCoA
+## Barplot by ASV
 
-```{r, include=FALSE}
-ordination <- phy_ctrls_zymo_chrismb %>% 
-  microbiome::transform("compositional") %>% 
-  ordinate(method = "NMDS", distance = "bray")
+```{r, fig.width = 8, fig.height=9}
+phy_ctrls_zymo_relabund <- phy_ctrls_zymo_chrismb %>% 
+  mutate_sample_data(batch = paste("B.", batch)) %>% 
+  tax_fix() %>% 
+  comp_barplot(tax_level = "Species", 
+               label = NULL,
+               bar_outline_colour = "darkgray",
+               facet_by = "batch") + 
+  labs(
+    title = "Genus",
+    y = "Relative Abundance"
+    ) + 
+  theme(legend.position = "bottom",
+        axis.ticks.x = element_blank(), panel.border = element_blank())+
+  guides(fill=guide_legend(nrow=3, byrow=FALSE))
+  
+phy_ctrls_zymo_relabund
+
 ```
 
+**Figure 3. Relative abundance of Species found in each Zymo Mock sample viewed as stacked barplots** Samples were separated (faceted) by sequencing batch. The legend is ordered by columns based on decreasing taxon abundance across all mock samples.
+
+\newpage
+
+## How much variability does the Batch explain?
 
 ```{r}
-plot_ordination(phy_ctrls_zymo_chrismb, 
-                ordination,type = "samples", 
-                color = "batch")+
-  #scale_color_brewer(type = "div")+
-  scale_color_viridis_d()+
-  stat_ellipse(aes(group = batch))+ 
-  geom_point(size = 3)
-
-```
-
-##{-}
-
-## barplot
-
-```{r}
-phy_ctrls_zymo_relabund <- microbiome::transform(phy_ctrls_zymo, "compositional")
-sample_names(phy_ctrls_zymo_relabund) <- paste0("plate",phy_ctrls_zymo_relabund@sam_data$plate, "_batch", phy_ctrls_zymo_relabund@sam_data$batch)
-
-plotly::ggplotly(plot_bar(phy_ctrls_zymo_relabund, fill = "ASV")+ scale_fill_viridis_d()+scale_color_viridis_d() + ggtitle("Filtered for ASVs > 0.1%"))
-
-```
-
-## how much variability does batch explain?
-
-Plate explains 60% of the variability, sequencing 30%. Nicely, this is expected, because sequencing should be more accurate than the previous steps necessary to prepare the library.
-
-```{r}
-
-zymo_dist_bray <- phyloseq::distance(phy_ctrls_zymo_relabund, method = "bray")
+distance_zymos <- as.matrix(distance_all)[phy_ctrls_zymo_chrismb@sam_data %>% rownames(),phy_ctrls_zymo_chrismb@sam_data %>% rownames()] %>% 
+  as.dist()
 library(vegan)
-betadisper(zymo_dist_bray, group = phy_ctrls_zymo_relabund@sam_data$batch) %>% permutest()
 
-zymo_permanova <- vegan::adonis2(formula = zymo_dist_bray ~ plate + batch, data = microbiome::meta(phy_ctrls_zymo_relabund))
+betadisp <- betadisper(distance_zymos, group = phy_ctrls_zymo_chrismb@sam_data$batch) %>% permutest()
 
-kableExtra::kbl(zymo_permanova, digits = 2) %>% 
-  kableExtra::kable_styling()
+betadisp$tab %>% 
+  kbl(format = "latex", caption = "PERMUTEST (Tukey post-hoc) with default settings on the beta-dispersity in relation to batch", digits = 3) %>% 
+  kable_styling(latex_options = "HOLD_position") %>% 
+  row_spec(0, bold = T)
+
+zymo_permanova <- vegan::adonis2(formula = distance_zymos ~ plate + batch, data = meta(phy_ctrls_zymo_chrismb))
+
+zymo_permanova %>% 
+  broom::tidy() %>% 
+  mutate(p.value = format.pval(p.value, digits = 1)) %>% 
+  kbl(format = "latex", digits = 3, caption = "Bray-Curtis distance-based PERMANOVA with standard settings to view the variability partitioning and significance in relation to sequencing batch and DNA extraction plate for Zymo Mock communities (Positive Controls)") %>% 
+  kable_styling(latex_options = "HOLD_position") %>% 
+  row_spec(0, bold = T)
 
 ```
