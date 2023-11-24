@@ -1,0 +1,2040 @@
+---
+title: "Smoking and salivary microbiota, a cross-sectional analysis of an Italian alpine population" 
+subtitle: "Supplementary Figures and Tables"
+author: 
+  - Giacomo Antonello,
+  - Freida Blostein,
+  - Deesha Bhaumik,
+  - Elyse Davis,
+  - Martin Gögele,
+  - Roberto Melotti,
+  - Peter Pramstaller,
+  - Cristian Pattaro,
+  - Nicola Segata,
+  - Betsy Foxman,
+  - Christian Fuchsberger
+date: "`r Sys.Date()`"
+output:
+  pdf_document:
+    toc: true
+    toc_depth: 2
+---
+
+```{r, echo=FALSE}
+
+knitr::opts_chunk$set(
+  cache = FALSE,
+  concordance = TRUE,
+  prompt = TRUE, # fig.width=5, fig.height=5,
+  out.width = "100%",
+  echo = FALSE,
+  warning = FALSE,
+  message = FALSE,
+  error = FALSE,
+  tidy = FALSE,
+  comment = ""
+  )
+
+```
+
+```{r, include=F}
+# from Bioconductor (install by running: BiocManager::install("x") | x = name of the package)
+# BiocManager::install(c("DESeq2", "phyloseq", "microbiome"))
+
+
+packages_github_links <- list(
+  speedyseq = "mikemc/speedyseq",
+  gautils = "g-antonello/gautils",
+  LinDA = "zhouhj1994/LinDA"
+)
+missing_github_pkgs <- !sapply(names(packages_github_links), function(pkg) pkg %in% rownames(installed.packages()))
+missing_github_pkgs <- names(missing_github_pkgs[missing_github_pkgs])
+
+if(length(missing_github_pkgs) > 0){
+sapply(missing_github_pkgs, function(pkg) devtools::install_github(packages_github_links[[pkg]]))
+}
+
+library(gautils)
+library(magrittr) # imported separately from tidyverse to also import '%<>%'
+library(ggpubr)
+library(kableExtra)
+library(microViz)
+library(table1)
+
+# graphics packages
+# library(ggpubr)
+# library(magrittr)
+# # my functions
+# source("my_personal_functions.R")
+# 
+# 
+# library(speedyseq)
+theme_set(theme_light())
+
+
+chrismb_phy <- readRDS("/shared/statgen/microbiome/CHRISMB/processed_data/microbiome_tables/phyloseq_built.Rds")
+
+
+threshold_prevalence <- 0.01
+threshold_detection <- 10
+
+
+```
+
+```{r, message=FALSE, warning=FALSE}
+chrismb_phy <- readRDS("/shared/statgen/microbiome/CHRISMB/processed_data/microbiome_tables/phyloseq_built.Rds")
+
+library(chrisData)
+
+possible_data_files <- chrisDataFile()
+
+selected_data_files <- c(
+    "general_information",
+    "household",
+    "clinical_traits",
+    "interview",
+    "labdata",
+    "substudies",
+    "drugs_summary"
+  )
+
+data_selected.list <- sapply(selected_data_files, function(x) chrisData(paste0(x, ".txt.gz")), USE.NAMES = T)
+
+data_selected.joined.df <- purrr::reduce(data_selected.list, full_join, by = "AID")
+data_selected.joined.df <- data_selected.joined.df[match(chrismb_phy@sam_data$AID, data_selected.joined.df$AID),]
+
+# Columns with all NAs must be necessarily removed 
+all_NAs <- apply(data_selected.joined.df, 2, function(x) all(is.na(x)))
+data_selected.joined.df <- data_selected.joined.df[, !all_NAs]
+
+# Columns of class "chron" are problematic, they must be removed to be able to work with phyloseq and metadata data.frame back and forth
+data_selected.joined_NODates.df <- select(data_selected.joined.df, -contains(c("x0bp08", "x0bc03", "x0bc06")))
+
+rm(data_selected.list)
+
+chrismb_phy <- phy_add_metadata_variables(chrismb_phy, df = data_selected.joined_NODates.df, by = "AID")
+
+
+levels(chrismb_phy@sam_data$x0oh01) <- c("0", "1-9", "10-19", "20+")
+levels(chrismb_phy@sam_data$x0sm51) <- c("Never", "Former", "Current (R)", "Current (NR)")
+chrismb_phy@sam_data$x0an03a %<>% as.numeric()
+
+chrismb_phy@sam_data$x0_ager_cat <- cut(chrismb_phy@sam_data$x0_ager, breaks = c(18, 31, 41, 51, 61, 71, max(chrismb_phy@sam_data$x0_ager)+1), include.lowest = TRUE, labels = c("18-30", "31-40", "41-50", "51-60", "61-70", "71+"))
+
+# create some househod (hid) info
+chrismb_phy <- relocate_sample_data(chrismb_phy, x0_ager_cat, .after = x0_ager) %>% 
+  mutate_sample_data(
+    hid = paste0("h", hid),
+    hid_size_chrismb = add_N_to_catVar(hid) %>% as.character() %>% gsub("h.*\\ ", "", .) %>% parse_number(),
+  smoking_exposure_ga = 
+    case_when(
+      grepl("Current", as.character(x0sm51)) ~ "Current",
+      TRUE ~ as.character(x0sm51)
+      ) %>% 
+    factor(levels = c("Never", "Former", "Current"))
+  ) %>% 
+  relocate_sample_data(smoking_exposure_ga, .before = x0sm51)
+
+```
+
+```{r}
+
+###############################
+## bin daily tobacco smoked
+###############################
+
+chrismb_phy %<>%
+  mutate_sample_data(
+    ### tobacco g per day (bin 5 by 5)
+    x0sm61_bin5cat = case_when(smoking_exposure_ga == "Current" & !is.na(x0sm61) ~ cut(
+      x0sm61,
+      breaks = c(0, 1, 2, seq(5, 30, 5), 61),
+      include.lowest = TRUE
+    )),
+  ### tobacco g per day (bin 5 by 5, semi-continuous, using upper limit of the range as integer)
+  x0sm61_bin5cont = case_when(smoking_exposure_ga == "Current" & !is.na(x0sm61) ~ cut(
+      x0sm61,
+      breaks = c(0, 1, 2, seq(5, 30, 5), 60),
+      labels = c(1, 2, seq(5, 30, 5), 60),
+      include.lowest = TRUE
+    )) %>% as.character() %>% as.numeric(),
+  
+    ### tobacco g per day (bin 2 by 2)
+    x0sm61_bin2cat = case_when(smoking_exposure_ga == "Current" & !is.na(x0sm61) ~ cut(
+      x0sm61,
+      breaks = c(0, 1, seq(2, 30, 2), 60),
+      include.lowest = TRUE
+    )),
+  
+  ### tobacco g per day (bin 2 by 2, semi-continuous, using upper limit of the range as integer)
+  x0sm61_bin2cont = case_when(smoking_exposure_ga == "Current" & !is.na(x0sm61) ~ cut(
+      x0sm61,
+      breaks = c(0, 1, seq(2, 30, 2), 60),
+      labels = c(1, seq(2, 30, 2), 60),
+      include.lowest = TRUE
+    )
+    ) %>% as.character() %>% as.numeric()
+  )
+
+```
+
+```{r}
+# x0sm40 = age when people quit or reduce
+# x0_ager = age rounded to closest integer
+
+max_value <- max(chrismb_phy@sam_data$x0_ager - chrismb_phy@sam_data$x0sm40, na.rm = T)
+
+chrismb_phy %<>% 
+  mutate_sample_data(
+    years_since_quitting_or_reducing = x0_ager - x0sm40,
+    
+    years_since_quitting_binned = case_when(
+      smoking_exposure_ga == "Former" & !is.na(years_since_quitting_or_reducing) ~ cut(years_since_quitting_or_reducing, 
+                                            breaks = c(0,1,3,5,10,max_value), 
+      include.lowest = TRUE
+    )
+  )
+)
+
+rm(max_value)
+
+```
+
+```{r}
+
+chrismb_phy %<>% 
+  mutate_sample_data(
+    smoking_detailed = case_when(
+      smoking_exposure_ga == "Never" ~ "Never",
+      
+      smoking_exposure_ga == "Former" ~ paste(smoking_exposure_ga,
+                                               years_since_quitting_binned, 
+                                               "y"),
+      smoking_exposure_ga == "Current" ~ paste(smoking_exposure_ga,
+                                               x0sm61_bin5cat,
+                                               "g"),
+      TRUE ~ "Other"
+    ),
+    smoking_detailed.Extra = case_when(
+      smoking_exposure_ga == "Never" ~ "Never",
+      
+      smoking_exposure_ga == "Former" ~ paste(smoking_exposure_ga,
+                                               years_since_quitting_or_reducing, 
+                                               "y"),
+      smoking_exposure_ga == "Current" ~ paste(smoking_exposure_ga,
+                                               x0sm61,
+                                               "g"),
+      TRUE ~ "Other"
+    )
+    
+  )
+
+
+
+nice_order_current <- sort(grep("Current", unique(chrismb_phy@sam_data$smoking_detailed), value = TRUE))[c(9,1,4,8,2,3,5,6,7,10)] %>% rev()
+
+nice_order_former <- sort(grep("Former", unique(chrismb_phy@sam_data$smoking_detailed), value = TRUE))[c(5,1,3,4,2,6)]
+
+final_levels <- c(nice_order_current,nice_order_former, "Never")
+
+
+# SMOKING DETAILED 1 - make ordered factor, useful for plotting
+chrismb_phy@sam_data$smoking_detailed <- factor(chrismb_phy@sam_data$smoking_detailed, levels = final_levels)
+
+
+```
+
+```{r}
+
+chrismb_phy_core <- core(chrismb_phy, detection = threshold_detection, prevalence = threshold_prevalence)
+
+phy_Q1 <- chrismb_phy_core %>% 
+  filter_sample_data(
+                     !is.na(x0oh01),
+                     !is.na(x0_ager),
+                     !is.na(x0_sex),
+                     !is.na(x0sm51),
+                     #x0bc10 != 1, # people who smoked were reported as 1, NAs are treated as non-smoking
+                     x0dd51 == "No") 
+
+
+phy_Q1_genus <- phy_tax_glom(phy_Q1, "Genus")
+
+
+phy_Q1_meta <- meta(phy_Q1)
+
+```
+
+```{r, include=F}
+
+sapply(paste0("A", 1:10), function(x) dir.create(paste0("appendix_results/",x), showWarnings = F, recursive = T))
+
+```
+
+# Phyloseq Object used for the analyses (ASV level)
+
+**Unfiltered Phyloseq Object** (Starting point, never used in the analyses)
+
+```{r}
+chrismb_phy
+```
+
+**Filtered Taxa and samples**. This was the phyloseq used for the actual anlyses For further details, see Suppl. Tables 2 and 4
+
+```{r}
+phy_Q1
+```
+
+\newpage
+
+# Supplementary Figures
+
+## Supplementary Figure 1 - Differentially Abundant genera in comparable literature
+
+\definecolor{bostonuniversityred}{rgb}{0.8, 0.0, 0.0}
+\definecolor{cobalt}{rgb}{0.0, 0.28, 0.67}
+\definecolor{corn}{rgb}{0.98, 0.93, 0.36}
+
+```{r}
+
+# load significant genera found in Figure 1 and average the effect sizes, then get the sign (-1, +1)
+diff_abundant_genera_CHRISMB <- readRDS("../Main/results/Figure1/DiffAbundGenera/significant_genera_Consensus-and-log2FC.RDS") %>% 
+  filter(taxon %in% readRDS("../Main/results/Figure1/DiffAbundGenera/significant_genera_consensus.RDS")) %>% 
+  column_to_rownames("taxon") %>% 
+  rowMeans(na.rm = T) %>% 
+  as.data.frame() %>% 
+  rownames_to_column("Genus") %>% 
+  set_names(c("Genus", "CHRISMB")) %>% 
+  mutate(CHRISMB = sign(CHRISMB))
+
+# load table of genera found in the literature
+excel_map <- read_tsv("https://raw.githubusercontent.com/g-antonello/CHRISMB-smoking-epidemiology/main/Appendix/appendix-input-data/diff_abund_genera_matrix_for_plots.tsv") %>% 
+  full_join(diff_abundant_genera_CHRISMB, by = "Genus") %>% 
+  column_to_rownames("Genus") %>% 
+  as.matrix()
+
+excel_map[is.na(excel_map)] <- 0
+
+```
+
+```{r}
+
+excel_map_no_rare_genera <- excel_map[rowSums(abs(excel_map)) >= 3,]
+
+clust_cols <- hclust(dist(t(
+  excel_map_no_rare_genera
+)))
+columns_ordered <- clust_cols$labels[clust_cols$order]
+
+clust_rows <- hclust(dist(excel_map_no_rare_genera))
+rows_ordered <- clust_rows$labels[clust_rows$order] %>% rev()
+
+heatmap_ggplot_common <- reshape2::melt(excel_map_no_rare_genera)  %>% 
+  mutate(Var1 = factor(Var1, levels = rows_ordered), 
+         Var2 = factor(Var2, levels = columns_ordered)) %>% 
+  ggplot(aes(x = Var2, y = Var1, fill = factor(value)))+ 
+  geom_tile(color="darkgray")+
+  scale_fill_manual(name = "Differential Abundance", 
+                    values = c("#0047AB", "#FBEC5D", "#CC0000"), 
+                    labels = c("Decreased", "NA/NS", "Increased"))+ 
+  theme(
+    panel.border = element_blank(), 
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.ticks = element_blank(),
+    axis.text.x = element_text(angle = -90, hjust = 0),
+    axis.text.y = element_text(hjust = 1)
+    )+
+  labs(
+    y = "Genus",
+    x = NULL
+  )
+
+```
+
+```{r}
+
+excel_map_genera_only1 <- excel_map[rowSums(abs(excel_map)) == 1,]
+excel_map_genera_only1 <- excel_map_genera_only1[, colSums(abs(excel_map_genera_only1)) > 0]
+
+clust_cols <- hclust(dist(t(
+  excel_map_genera_only1
+)))
+columns_ordered <- clust_cols$labels[clust_cols$order]
+
+clust_rows <- hclust(dist(excel_map_genera_only1))
+rows_ordered <- clust_rows$labels[clust_rows$order] %>% rev()
+
+heatmap_ggplot_rare <- reshape2::melt(excel_map_genera_only1)  %>% 
+  mutate(Var1 = factor(Var1, levels = rows_ordered), 
+         Var2 = factor(Var2, levels = columns_ordered)) %>% 
+  ggplot(aes(x = Var2, y = Var1, fill = factor(value)))+ 
+  geom_tile(color="darkgray")+
+  scale_fill_manual(name = "Differential Abundance Direction", 
+                    values = c("#0047AB", "#FBEC5D", "#CC0000"),
+                    labels = c("Decreased", "NA/NS", "Increased"))+
+  theme(
+    panel.border = element_blank(), 
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.ticks = element_blank(),
+    axis.text.x = element_text(angle = -90, hjust = 0),
+    axis.text.y = element_text(hjust = 1)
+    )+
+  labs(
+    y = "Genus",
+    x = NULL
+  )
+
+```
+
+```{r, fig.width=9, fig.height=7}
+
+A1_plot <- ggarrange(heatmap_ggplot_common, heatmap_ggplot_rare+ labs(y = NULL), labels = LETTERS[1:2], common.legend = T)
+
+ggsave(plot = A1_plot, 
+       filename = "appendix_results/A1/A1_heatmap_diff_abund.genera.png", 
+       height = 9, 
+       width = 12, 
+       dpi = 300)
+
+ggarrange(heatmap_ggplot_common, heatmap_ggplot_rare+ labs(y = NULL), common.legend = T)
+```
+
+**Supplementary Figure 1. Heatmap of differentially abundant genera in smokers compared to non-smokers both in the literature and in the current study (CHRISMB).** Genera were manually annotated based on publications with comparable setup: cross-sectional studies on a healthy population, and 16S amplicon microbiota data. \textbf{\textcolor{bostonuniversityred}{Red}} color indicates increased abundance in smokers, \textbf{\textcolor{cobalt}{Blue}} means decreased abundance in smokers. \textbf{\textcolor{corn}{Yellow}} means not significant (NS) or not mentioned (NA) in the text nor in the supplementary materials. **(Left)** Commonly reported genera (present in at least 3 studies). **(Right)** Rarely reported genera (present in only one study).
+
+## Supplementary Figure 2 - Tooth loss vs Age and Smoking
+
+```{r}
+
+Fig_A4.A <- phy_Q1_meta %>% 
+  group_by(x0_ager_cat, x0oh01) %>% 
+  tally() %>% 
+  ungroup() %>% 
+  group_by(x0_ager_cat) %>%
+  mutate(n = n/sum(n)*100) %>% 
+  
+  ggplot(aes(y = x0_ager_cat, x = n, fill = x0oh01))+
+  geom_bar(stat= "identity")+
+  scale_fill_viridis_d()+
+  labs(x = "Proportion of Individuals (%)",
+       y = "Age Category",
+       fill = "Number of Teeth")+
+  theme(legend.position = "top")
+
+```
+
+```{r}
+Fig.A4B <- phy_Q1_meta %>% 
+  filter(smoking_exposure_ga != "Current") %>% 
+  mutate(x0_ager_cat = paste(x0_ager_cat, "years")) %>% 
+  ggplot(aes(x = x0oh01, y = x0sm55))+ 
+  geom_boxplot()+facet_wrap(~x0_ager_cat)+
+  EnvStats::stat_n_text()+ 
+  labs(x = "Number of Teeth", 
+       y = "Lifetime Pack-Year equivalents"
+  )
+
+```
+
+```{r, fig.width=7, fig.height=7}
+
+age_teeth_smoking <- suppressWarnings(ggpubr::ggarrange(Fig_A4.A, Fig.A4B, ncol = 1, nrow = 2, labels = LETTERS[1:2], heights = c(0.6,1)))
+
+ggsave(plot = age_teeth_smoking, 
+       filename = "appendix_results/A2/A2_teeth_vs_smoking.png", 
+       width = 7, 
+       height = 9, 
+       dpi = 300)
+
+age_teeth_smoking
+```
+
+**Supplementary Figure 2: Non-independence of number of teeth from age groups and smoking** (A) Relationship between age and number of teeth. Numbers are reported as proportions for each age category. (B) Relationship between lifetime exposure to smoke (lifetime pack-years) and the number of teeth in only current smokers. Individuals were further split into age groups to control for age-related tooth loss. Lifetime pack years, a proxy of a lifetime exposure to the tobacco smoked, were calculated in Former and Current smokers as follows: 
+
+$$
+Lifetime~Pack\text-Year~equivalents = \frac{\frac{cigarettes}{day}}{20} \times 365~days \times years~smoked
+$$
+
+## Supplementary Figure 3 - Barplots of Phylum and Genus level salivary microbiota composition in the CHRISMB population
+
+```{r}
+samples_by_decreasing_prevotella <- phy_Q1_genus %>% 
+  phy_transform("compositional") %>% 
+  phy_OtuMetaTable() %>% 
+  arrange(desc(Prevotella))
+
+genus_barplots <- phy_Q1 %>% 
+  filter_tax_table(!is.na(Genus)) %>% 
+  comp_barplot(tax_level = "Genus", 
+               n_taxa = 20, 
+               label = NULL,
+               bar_outline_colour = NA, 
+               sample_order = samples_by_decreasing_prevotella$sampIDs) + 
+  labs(
+    title = "Genus",
+    y = "Relative Abundance"
+    ) + 
+  theme(legend.position = "bottom",
+        axis.ticks.x = element_blank(), panel.border = element_blank())
+
+samples_by_decreasing_Firmicutes <- phy_Q1 %>%
+  phy_tax_glom("Phylum") %>% 
+  phy_transform("compositional") %>% 
+  phy_OtuMetaTable() %>% 
+  arrange(desc(Firmicutes))
+
+phylum_barplots <- phy_Q1 %>% 
+  filter_tax_table(!is.na(Phylum)) %>% 
+  comp_barplot(tax_level = "Phylum", 
+               n_taxa = 20, 
+               label = NULL,
+               bar_outline_colour = NA, 
+               sample_order = samples_by_decreasing_Firmicutes$sampIDs) + 
+  labs(
+    title = "Phylum",
+    y = "Relative Abundance"
+    ) + 
+  theme(
+    legend.position = "bottom",
+    axis.ticks.x = element_blank(), 
+    panel.border = element_blank()
+    )
+```
+
+```{r, fig.height=7, fig.width=7}
+ggarrange(
+phylum_barplots + theme(legend.position = "right"),
+genus_barplots + theme(legend.position = "right"),
+labels = LETTERS[1:2],
+nrow = 2, ncol = 1
+)
+```
+
+**Supplementary Figure 3. Barplots of relative abundance composition of CHRISMB samples included in this study (N = 1601)**
+Each bar is a sample. Samples were sorted from left to right based on the decreasing relative abundance of the most abundant taxa overall  (A) Phylum level, samples were sorted by decreasing abundance of Firmicutes; (B)  Genus level, samples were sorted by decreasing abundance of Prevotella.
+
+\newpage
+
+## Supplementary Figure 4 - Alpha diversity and richness in relation to smoking status
+
+```{r}
+metrics <- c("Shannon", "InvSimpson", "Observed", "Chao1")
+phy_Q1 <- phy_alpha_div_into_phy_metadata(phy_Q1, raref_depth = 5000, measures = metrics)
+
+plots_alpha <- lapply(paste0("alpha_", metrics), function(alpha)
+  ggplot(meta(phy_Q1), aes(y = eval(parse(text = alpha)), x = x0oh01, fill = smoking_exposure_ga, group = interaction(x0oh01, smoking_exposure_ga)))+ 
+    geom_point(aes(color = smoking_exposure_ga), position= position_jitterdodge(jitter.width = 0.3))+
+    geom_boxplot(show.legend = F, alpha = 0.6) +
+    scale_color_manual(values = ggsci::pal_jco()(4)[c(1,2,4)])+
+    scale_fill_manual(values = ggsci::pal_jco()(4)[c(1,2,4)])+
+    labs(
+      x = "Number of Teeth",
+      y = gsub("alpha_", "", alpha),
+      fill = "Smoking Status",
+      color = "Smoking Status"
+    ))
+
+ggarrange(plotlist = plots_alpha, common.legend = T, legend = "bottom", labels = LETTERS[1:4])
+```
+
+**Supplementary Figure 4. Alpha diversity and richness estimates in relation to smoking (colours) subdivided by the number of teeth (x axis)**
+(A) Shannon diversity; (B) Inverse Simpson diversity; (C) Observed number of taxa; (D) Chao 1 Richness. Estimates were calculated on samples rarefied to 5000 counts per sample.
+
+```{r, results='asis'}
+linearModelsAlpha <- sapply(paste0("alpha_", metrics), function(alpha) lm(as.formula(paste0(alpha, " ~ ", paste(c("smoking_exposure_ga", "x0oh01", "x0_ager", "x0_sex"), collapse = " + "))), data = meta(phy_Q1)),
+                            USE.NAMES = T, simplify = F
+       )
+
+for (alpha in names(linearModelsAlpha)){
+  broom::tidy(linearModelsAlpha[[alpha]]) %>% 
+  mutate(term = c("Intercept", "Smoking Status: Former", "Smoking Status: Current", "Number of Teeth: 1-9", "Number of Teeth: 10-19","Number of Teeth: 20+", "Age", "Sex: Female"),
+         p.value = format.pval(p.value, digits = 1)) %>% 
+    
+    kbl(digits = 2, booktabs = T, caption = paste(gsub("alpha_", "", alpha), "Diversity/Richness metric in relation to other variables considered in the study. Significance was estimated with the `stats::lm` linear regression function modeling each alpha metric against the following variables in the model: age, sex, Number of Teeth, Smoking Status. No, transformation was applied to any variable considered"), format = "latex", label = NULL) %>% 
+          kable_styling(latex_options = "HOLD_position") %>% 
+    cat()
+}
+```
+
+## Supplementary Figure 5 - Sex specific differentially abundant genera with Smoking
+
+```{r}
+phy_Q1_A5 <-filter_sample_data(phy_Q1_genus, x0_sex == "Male")
+```
+
+```{r, fig.align='center'}
+## Diff abund 1: DESeq2
+dir.create("appendix_results/A5/DiffAbund_Males/DESeq2/", recursive = T)
+
+if(!file.exists("appendix_results/A5/DiffAbund_Males/DESeq2/figureA5_deseq2_dataframe.list.RDS")){
+  library(DESeq2)
+  #############################################################################
+  
+  deseq_object_genus <-
+    phyloseq_to_deseq2(phy_Q1_A5, design = ~ x0_ager_cat + x0oh01 + smoking_exposure_ga)
+  
+  geom_means <- apply(counts(deseq_object_genus), 1, function(x) exp(mean(log(x[x>0]))))
+  
+  # estimate size factors, important to account for library size variations
+  estim_size <- estimateSizeFactors(deseq_object_genus, geoMeans = geom_means)
+  
+  # compute the DESeq2 glm, accounting for the estimate size factor and geometric means
+  
+  deseq2_results_genus <- DESeq(estim_size, fitType = "local")
+  
+  
+  saveRDS(deseq2_results_genus, "appendix_results/A5/DiffAbund_Males/DESeq2/figureA5_deseq2_dataframe.list.RDS")
+} else{
+  deseq2_results_genus <- readRDS("appendix_results/A5/DiffAbund_Males/DESeq2/figureA5_deseq2_dataframe.list.RDS")
+}
+
+```
+
+```{r, include=FALSE}
+## Diff abund 2: LinDA
+#devtools::install_github("zhouhj1994/LinDA")
+
+dir.create("appendix_results/A5/DiffAbund_Males/LinDA/", recursive = T)
+
+if(!file.exists("appendix_results/A5/DiffAbund_Males/LinDA/LinDA_output.list.RDS")){
+  
+  library(LinDA)
+  
+  LinDA_model_genera <- linda(otu.tab = abundances(phy_Q1_A5),
+                              meta = meta(phy_Q1_A5), 
+                              formula =  "~ x0_ager_cat + x0oh01 + smoking_exposure_ga", 
+                              alpha = 0.05,
+                              prev.cut = 0.01, 
+                              lib.cut = 1000, 
+                              winsor.quan = 0.97,
+                              adaptive = T)
+  
+  saveRDS(LinDA_model_genera, "appendix_results/A5/DiffAbund_Males/LinDA/LinDA_output.list.RDS")
+}else{
+  LinDA_model_genera <- readRDS("appendix_results/A5/DiffAbund_Males/LinDA/LinDA_output.list.RDS")
+}
+
+```
+
+```{r, include=FALSE}
+## Diff abund 3: Maaslin2
+dir.create("appendix_results/A5/DiffAbund_Males/Maaslin2", showWarnings = FALSE, recursive = T)
+
+
+if(!file.exists("appendix_results/A5/DiffAbund_Males/Maaslin2/significant_results.tsv")){
+  
+  library(Maaslin2)
+  # older normaliz and so on 
+  # Maaslin2(
+  #   input_data = picrust_taxa_matrix_Q1, 
+  #   input_metadata = phy_Q1_meta, 
+  #   output = "../results/Maaslin2_DA", 
+  #   analysis_method = "LM",
+  #   fixed_effects = c("age_cat", "sex", "x0oh01", "smoking_exposure_ga"),
+  #   reference = c("smoking_exposure_ga, Never"),
+  #   transform = "LOG",
+  #   normalization = "TMM",
+  #   correction = "BH",
+  #   plot_heatmap = F
+  # )
+  
+  # these following are the same settings used by Nearing  et al. (2021) 
+  Maaslin2(
+    input_data = abundances(phy_Q1_A5), 
+    input_metadata = meta(phy_Q1_A5), 
+    output = "appendix_results/A5/DiffAbund_Males/Maaslin2/", 
+    analysis_method = "LM",
+    fixed_effects = c("x0_ager_cat", "x0oh01","smoking_exposure_ga"),
+    reference = c("smoking_exposure_ga", "Never"),
+    transform = "LOG",
+    normalization = "TSS",
+    correction = "BH",
+    standardize = FALSE,
+    plot_heatmap = F,
+    plot_scatter = F
+  )
+  
+  
+}
+
+genera_names_map_all <- as.data.frame(tax_table(phy_Q1_genus))["Genus"] %>% 
+  mutate(feature = make.names(Genus))
+
+maaslin_results_genera <- read_tsv("appendix_results/A5/DiffAbund_Males/Maaslin2/significant_results.tsv") %>% 
+  left_join(genera_names_map_all, by = "feature") %>% 
+  mutate(feature = Genus) %>% 
+  dplyr::select(-Genus)
+
+```
+
+```{r, include=FALSE, cache=TRUE}
+## Diff abund 4: ALDEx2 (glm)
+dir.create("appendix_results/A5/DiffAbund_Males/ALDEx2/", recursive = T)
+
+if (!file.exists("appendix_results/A5/DiffAbund_Males/ALDEx2/ALDEx2.DA.rawResults_genera.list.RDS")) {
+  
+  library(ALDEx2)
+  # define model matrix, based on the metadata
+  model_mtx <-
+    model.matrix(
+      ~ x0_ager_cat + x0oh01 + smoking_exposure_ga,
+      data = dplyr::select(
+        meta(phy_Q1_A5),
+        x0oh01,
+        x0_ager_cat,
+        smoking_exposure_ga
+      )
+    )
+  # perform the clr differential abundance
+  aldex.glm.genera_smoking_ga <-
+    aldex.clr(abundances(phy_Q1_A5),
+              model_mtx,
+              mc.samples = 200,
+              denom = "all", 
+              useMC = T
+    )
+  
+  # make glm, obtain significance of terms
+  glm.test_genera_smoking_ga <- aldex.glm(aldex.glm.genera_smoking_ga, model_mtx)
+  
+  # this step gets estimates effect sizes, it takes ages, like 30-60 minutes
+  glm.effects_genera_smoking_ga <- aldex.glm.effect(aldex.glm.genera_smoking_ga, include.sample.summary = T, verbose = FALSE, useMC = T)
+  
+  # aggregate these results into one data frame, that looks like lme4 output
+  aldex.results.genera <- list(clr.model = aldex.glm.genera_smoking_ga,
+                               glm.test = glm.test_genera_smoking_ga,
+                               eff_size.test = glm.effects_genera_smoking_ga)
+  
+  
+  saveRDS(aldex.results.genera, "appendix_results/A5/DiffAbund_Males/ALDEx2/ALDEx2.DA.rawResults_genera.list.RDS")
+  
+} else {
+  aldex.results.genera <- readRDS("appendix_results/A5/DiffAbund_Males/ALDEx2/ALDEx2.DA.rawResults_genera.list.RDS")
+}
+
+```
+
+```{r}
+
+## Diff abund 5: ANCOM-BC
+dir.create("appendix_results/A5/DiffAbund_Males/ANCOM-BC/", recursive = T)
+
+if (!file.exists("appendix_results/A5/DiffAbund_Males/ANCOM-BC/ANCOM-BC.DA.rawResults_genera.list.RDS")) {
+  tmp <- mia::makeTreeSummarizedExperimentFromPhyloseq(phy_Q1_A5 %>% select_sample_data(x0_sex, x0_ager_cat, x0oh01, smoking_exposure_ga)) 
+  
+  
+  library(ANCOMBC)
+  
+  # takes around 30 minutes
+  ancom_results <- ancombc2(data = tmp,
+                            assay_name = "counts", 
+                            tax_level = NULL,
+                            fix_formula = "x0_ager_cat + x0oh01 + smoking_exposure_ga", 
+                            group = "smoking_exposure_ga",
+                            struc_zero = TRUE,
+                            iter_control = list(tol = 1e-5, max_iter = 20, verbose = FALSE),
+                            em_control = list(tol = 1e-5, max_iter = 20),  
+                            p_adj_method = "BH",
+                            n_cl = 1,
+                            alpha = 0.05)
+  
+  saveRDS(ancom_results, "appendix_results/A5/DiffAbund_Males/ANCOM-BC/ANCOM-BC.DA.rawResults_genera.list.RDS")
+  detach("package:ANCOMBC", unload = T)
+}else{
+  
+  ancom_results <- readRDS("appendix_results/A5/DiffAbund_Males/ANCOM-BC/ANCOM-BC.DA.rawResults_genera.list.RDS")
+  
+}
+
+```
+
+```{r}
+## Summary of results
+library(DESeq2)
+
+# DESeq2
+deseq2_signif_results <- results(deseq2_results_genus, 
+                                 contrast = c("smoking_exposure_ga","Current", "Never"),
+                                 pAdjustMethod = "BH") %>% 
+  as.data.frame() %>% 
+  rownames_to_column("taxon") %>% 
+  filter(padj < 0.05)
+
+# LinDA
+LinDAresults_taxon_signif_Current <- LinDA_model_genera$output$smoking_exposure_gaCurrent %>% 
+  filter(padj < 0.05, 
+         #abs(log2FoldChange) > 0.5
+  ) %>% 
+  rownames_to_column("taxon")
+
+# MaAsLin2
+maaslin_signif <- maaslin_results_genera %>% 
+  filter(metadata == "smoking_exposure_ga") %>% 
+  dplyr::select(feature, value, coef, stderr, pval, qval, N.not.0) %>% 
+  filter(qval < 0.05, 
+         #abs(coef) > 0.5, 
+         value == "Current")
+
+# ALDEx2
+aldex_gLinDAsmoking_signif <- aldex.results.genera$glm.test %>% 
+  as.data.frame() %>% 
+  dplyr::select(contains("smoking_exposure_gaCurrent")) %>% 
+  dplyr::rename_all(.funs = function(x) gsub(pattern =  ".*\\:", replacement = "", x = x)) %>% 
+  rownames_to_column("taxon") %>% 
+  as_tibble() %>% 
+  filter(
+    #abs(Est) > 0.5, 
+    pval.holm < 0.05)
+
+# ANCOM-BC
+
+ancom2_signif_results <- ancom_results$res %>% 
+  dplyr::select(contains(c("taxon", "gaCurrent")), -contains(c("diff_", "passed_ss"))) %>% 
+  set_names(c("taxon", "log2FoldChange", "lfcSE", "wald_stat", "p.value", "padj")) %>% 
+  filter(
+    #abs(log2FoldChange) > 0.5,
+    padj < 0.05
+  )
+
+all_models_signif_genera <- list(ALDEx2 = aldex_gLinDAsmoking_signif %>% dplyr::select(taxon, Est) %>% set_names(c("taxon", "ALDEx2")), 
+                                 MaAsLin2 = maaslin_signif %>% dplyr::select(feature, coef) %>% set_names(c("taxon", "MaAsLin2")), 
+                                 LinDA = LinDAresults_taxon_signif_Current %>% dplyr::select(taxon,log2FoldChange) %>% set_names(c("taxon", "LinDA")), 
+                                 DESeq2 = deseq2_signif_results %>% dplyr::select(taxon, log2FoldChange) %>% set_names(c("taxon", "DESeq2")),
+                                 `ANCOM-BC` = ancom2_signif_results %>% dplyr::select(taxon, log2FoldChange) %>% set_names(c("taxon", "ANCOM-BC"))
+) %>% 
+  purrr::reduce(., full_join, by = "taxon")
+
+
+
+frequency_signif_taxon <- pivot_longer(all_models_signif_genera, cols = !starts_with("taxon"), names_to = "DA_method", values_to = "da_eff_size") %>% 
+  filter(!is.na(da_eff_size)) %>% 
+  group_by(taxon) %>% 
+  tally() %>% 
+  arrange(desc(n))
+
+
+taxa_union <- all_models_signif_genera$taxon
+
+taxa_consensus <- frequency_signif_taxon %>% 
+  filter(n >= 4) %>% 
+  .$taxon
+
+taxa_intersect <- all_models_signif_genera %>% 
+  .[complete.cases(.),] %>%
+  .$taxon
+
+saveRDS(taxa_union, "appendix_results/A5/DiffAbund_Males/significant_genera_union.RDS")
+saveRDS(taxa_intersect, "appendix_results/A5/DiffAbund_Males/significant_genera_intersect.RDS")
+saveRDS(taxa_consensus,  "appendix_results/A5/DiffAbund_Males/significant_genera_consensus.RDS")
+
+saveRDS(all_models_signif_genera, "appendix_results/A5/DiffAbund_Males/significant_genera_Consensus-and-log2FC.RDS")
+```
+
+```{r}
+
+phy_Q1_A5 <-filter_sample_data(phy_Q1_genus, x0_sex == "Female")
+
+```
+
+```{r, fig.align='center'}
+## Diff abund 1: DESeq2
+dir.create("appendix_results/A5/DiffAbund_Females/DESeq2/", recursive = T)
+
+if(!file.exists("appendix_results/A5/DiffAbund_Females/DESeq2/figureA5_deseq2_dataframe.list.RDS")){
+  library(DESeq2)
+  #############################################################################
+  
+  deseq_object_genus <-
+    phyloseq_to_deseq2(phy_Q1_A5, design = ~ x0_ager_cat + x0oh01 + smoking_exposure_ga)
+  
+  geom_means <- apply(counts(deseq_object_genus), 1, function(x) exp(mean(log(x[x>0]))))
+  
+  # estimate size factors, important to account for library size variations
+  estim_size <- estimateSizeFactors(deseq_object_genus, geoMeans = geom_means)
+  
+  # compute the DESeq2 glm, accounting for the estimate size factor and geometric means
+  
+  deseq2_results_genus <- DESeq(estim_size, fitType = "local")
+  
+  
+  saveRDS(deseq2_results_genus, "appendix_results/A5/DiffAbund_Females/DESeq2/figureA5_deseq2_dataframe.list.RDS")
+} else{
+  deseq2_results_genus <- readRDS("appendix_results/A5/DiffAbund_Females/DESeq2/figureA5_deseq2_dataframe.list.RDS")
+}
+
+```
+
+```{r, include=FALSE}
+## Diff abund 2: LinDA
+#devtools::install_github("zhouhj1994/LinDA")
+
+dir.create("appendix_results/A5/DiffAbund_Females/LinDA/", recursive = T)
+
+if(!file.exists("appendix_results/A5/DiffAbund_Females/LinDA/LinDA_output.list.RDS")){
+  
+  library(LinDA)
+  
+  LinDA_model_genera <- linda(otu.tab = abundances(phy_Q1_A5),
+                              meta = meta(phy_Q1_A5), 
+                              formula =  "~ x0_ager_cat + x0oh01 + smoking_exposure_ga", 
+                              alpha = 0.05,
+                              prev.cut = 0.01, 
+                              lib.cut = 1000, 
+                              winsor.quan = 0.97,
+                              adaptive = T)
+  
+  saveRDS(LinDA_model_genera, "appendix_results/A5/DiffAbund_Females/LinDA/LinDA_output.list.RDS")
+}else{
+  LinDA_model_genera <- readRDS("appendix_results/A5/DiffAbund_Females/LinDA/LinDA_output.list.RDS")
+}
+
+```
+
+```{r, include=FALSE}
+## Diff abund 3: Maaslin2
+dir.create("appendix_results/A5/DiffAbund_Females/Maaslin2", showWarnings = FALSE, recursive = T)
+
+
+if(!file.exists("appendix_results/A5/DiffAbund_Females/Maaslin2/significant_results.tsv")){
+  
+  library(Maaslin2)
+  # older normaliz and so on 
+  # Maaslin2(
+  #   input_data = picrust_taxa_matrix_Q1, 
+  #   input_metadata = phy_Q1_meta, 
+  #   output = "../results/Maaslin2_DA", 
+  #   analysis_method = "LM",
+  #   fixed_effects = c("age_cat", "sex", "x0oh01", "smoking_exposure_ga"),
+  #   reference = c("smoking_exposure_ga, Never"),
+  #   transform = "LOG",
+  #   normalization = "TMM",
+  #   correction = "BH",
+  #   plot_heatmap = F
+  # )
+  
+  # these following are the same settings used by Nearing  et al. (2021) 
+  Maaslin2(
+    input_data = abundances(phy_Q1_A5), 
+    input_metadata = meta(phy_Q1_A5), 
+    output = "appendix_results/A5/DiffAbund_Females/Maaslin2/", 
+    analysis_method = "LM",
+    fixed_effects = c("x0_ager_cat", "x0oh01","smoking_exposure_ga"),
+    reference = c("smoking_exposure_ga", "Never"),
+    transform = "LOG",
+    normalization = "TSS",
+    correction = "BH",
+    standardize = FALSE,
+    plot_heatmap = F,
+    plot_scatter = F
+  )
+  
+  
+}
+
+genera_names_map_all <- as.data.frame(tax_table(phy_Q1_genus))["Genus"] %>% 
+  mutate(feature = make.names(Genus))
+
+maaslin_results_genera <- read_tsv("appendix_results/A5/DiffAbund_Females/Maaslin2/significant_results.tsv") %>% 
+  left_join(genera_names_map_all, by = "feature") %>% 
+  mutate(feature = Genus) %>% 
+  dplyr::select(-Genus)
+
+```
+
+```{r, cache=TRUE, include=FALSE}
+## Diff abund 4: ALDEx2 (glm)
+dir.create("appendix_results/A5/DiffAbund_Females/ALDEx2/", recursive = T)
+
+if (!file.exists("appendix_results/A5/DiffAbund_Females/ALDEx2/ALDEx2.DA.rawResults_genera.list.RDS")) {
+  
+  library(ALDEx2)
+  # define model matrix, based on the metadata
+  model_mtx <-
+    model.matrix(
+      ~ x0_ager_cat + x0oh01 + smoking_exposure_ga,
+      data = dplyr::select(
+        meta(phy_Q1_A5),
+        x0oh01,
+        x0_ager_cat,
+        smoking_exposure_ga
+      )
+    )
+  # perform the clr differential abundance
+  aldex.glm.genera_smoking_ga <-
+    aldex.clr(abundances(phy_Q1_A5),
+              model_mtx,
+              mc.samples = 200,
+              denom = "all", 
+              useMC = T
+    )
+  
+  # make glm, obtain significance of terms
+  glm.test_genera_smoking_ga <- aldex.glm(aldex.glm.genera_smoking_ga, model_mtx)
+  
+  # this step gets estimates effect sizes, it takes ages, like 30-60 minutes
+  glm.effects_genera_smoking_ga <- aldex.glm.effect(aldex.glm.genera_smoking_ga, include.sample.summary = T, verbose = FALSE, useMC = T)
+  
+  # aggregate these results into one data frame, that looks like lme4 output
+  aldex.results.genera <- list(clr.model = aldex.glm.genera_smoking_ga,
+                               glm.test = glm.test_genera_smoking_ga,
+                               eff_size.test = glm.effects_genera_smoking_ga)
+  
+  
+  saveRDS(aldex.results.genera, "appendix_results/A5/DiffAbund_Females/ALDEx2/ALDEx2.DA.rawResults_genera.list.RDS")
+  
+} else {
+  aldex.results.genera <- readRDS("appendix_results/A5/DiffAbund_Females/ALDEx2/ALDEx2.DA.rawResults_genera.list.RDS")
+}
+
+```
+
+```{r}
+## Diff abund 5: ANCOM-BC
+dir.create("appendix_results/A5/DiffAbund_Females/ANCOM-BC/", recursive = T)
+
+if (!file.exists("appendix_results/A5/DiffAbund_Females/ANCOM-BC/ANCOM-BC.DA.rawResults_genera.list.RDS")) {
+  tmp <- mia::makeTreeSummarizedExperimentFromPhyloseq(phy_Q1_A5 %>% select_sample_data(x0_sex, x0_ager_cat, x0oh01, smoking_exposure_ga)) 
+  
+  
+  library(ANCOMBC)
+  
+  # takes around 30 minutes
+  ancom_results <- ancombc2(data = tmp,
+                            assay_name = "counts", 
+                            tax_level = NULL,
+                            fix_formula = "x0_ager_cat + x0oh01 + smoking_exposure_ga", 
+                            group = "smoking_exposure_ga",
+                            struc_zero = TRUE,
+                            iter_control = list(tol = 1e-5, max_iter = 20, verbose = FALSE),
+                            em_control = list(tol = 1e-5, max_iter = 20),  
+                            p_adj_method = "BH",
+                            n_cl = 1,
+                            alpha = 0.05)
+  
+  saveRDS(ancom_results, "appendix_results/A5/DiffAbund_Females/ANCOM-BC/ANCOM-BC.DA.rawResults_genera.list.RDS")
+  detach("package:ANCOMBC", unload = T)
+}else{
+  
+  ancom_results <- readRDS("appendix_results/A5/DiffAbund_Females/ANCOM-BC/ANCOM-BC.DA.rawResults_genera.list.RDS")
+  
+}
+
+```
+
+```{r}
+## Summary of results
+library(DESeq2)
+
+# DESeq2
+deseq2_signif_results <- results(deseq2_results_genus, 
+                                 contrast = c("smoking_exposure_ga","Current", "Never"),
+                                 pAdjustMethod = "BH") %>% 
+  as.data.frame() %>% 
+  rownames_to_column("taxon") %>% 
+  filter(padj < 0.05)
+
+# LinDA
+LinDAresults_taxon_signif_Current <- LinDA_model_genera$output$smoking_exposure_gaCurrent %>% 
+  filter(padj < 0.05, 
+         #abs(log2FoldChange) > 0.5
+  ) %>% 
+  rownames_to_column("taxon")
+
+# MaAsLin2
+maaslin_signif <- maaslin_results_genera %>% 
+  filter(metadata == "smoking_exposure_ga") %>% 
+  dplyr::select(feature, value, coef, stderr, pval, qval, N.not.0) %>% 
+  filter(qval < 0.05, 
+         #abs(coef) > 0.5, 
+         value == "Current")
+
+# ALDEx2
+aldex_gLinDAsmoking_signif <- aldex.results.genera$glm.test %>% 
+  as.data.frame() %>% 
+  dplyr::select(contains("smoking_exposure_gaCurrent")) %>% 
+  dplyr::rename_all(.funs = function(x) gsub(pattern =  ".*\\:", replacement = "", x = x)) %>% 
+  rownames_to_column("taxon") %>% 
+  as_tibble() %>% 
+  filter(
+    #abs(Est) > 0.5, 
+    pval.holm < 0.05)
+
+# ANCOM-BC
+
+ancom2_signif_results <- ancom_results$res %>% 
+  dplyr::select(contains(c("taxon", "gaCurrent")), -contains(c("diff_", "passed_ss"))) %>% 
+  set_names(c("taxon", "log2FoldChange", "lfcSE", "wald_stat", "p.value", "padj")) %>% 
+  filter(
+    #abs(log2FoldChange) > 0.5,
+    padj < 0.05
+  )
+
+all_models_signif_genera <- list(ALDEx2 = aldex_gLinDAsmoking_signif %>% dplyr::select(taxon, Est) %>% set_names(c("taxon", "ALDEx2")), 
+                                 MaAsLin2 = maaslin_signif %>% dplyr::select(feature, coef) %>% set_names(c("taxon", "MaAsLin2")), 
+                                 LinDA = LinDAresults_taxon_signif_Current %>% dplyr::select(taxon,log2FoldChange) %>% set_names(c("taxon", "LinDA")), 
+                                 DESeq2 = deseq2_signif_results %>% dplyr::select(taxon, log2FoldChange) %>% set_names(c("taxon", "DESeq2")),
+                                 `ANCOM-BC` = ancom2_signif_results %>% dplyr::select(taxon, log2FoldChange) %>% set_names(c("taxon", "ANCOM-BC"))
+) %>% 
+  purrr::reduce(., full_join, by = "taxon")
+
+
+
+frequency_signif_taxon <- pivot_longer(all_models_signif_genera, cols = !starts_with("taxon"), names_to = "DA_method", values_to = "da_eff_size") %>% 
+  filter(!is.na(da_eff_size)) %>% 
+  group_by(taxon) %>% 
+  tally() %>% 
+  arrange(desc(n))
+
+
+taxa_union <- all_models_signif_genera$taxon
+
+taxa_consensus <- frequency_signif_taxon %>% 
+  filter(n >= 4) %>% 
+  .$taxon
+
+taxa_intersect <- all_models_signif_genera %>% 
+  .[complete.cases(.),] %>%
+  .$taxon
+
+saveRDS(taxa_union, "appendix_results/A5/DiffAbund_Females/significant_genera_union.RDS")
+saveRDS(taxa_intersect, "appendix_results/A5/DiffAbund_Females/significant_genera_intersect.RDS")
+saveRDS(taxa_consensus,  "appendix_results/A5/DiffAbund_Females/significant_genera_consensus.RDS")
+
+saveRDS(all_models_signif_genera, "appendix_results/A5/DiffAbund_Females/significant_genera_Consensus-and-log2FC.RDS")
+```
+
+```{r}
+
+males_signif_genera <- readRDS("appendix_results/A5/DiffAbund_Males/significant_genera_Consensus-and-log2FC.RDS")
+
+females_signif_genera <- readRDS("appendix_results/A5/DiffAbund_Females/significant_genera_Consensus-and-log2FC.RDS")
+
+figure1_genera <- readRDS("../Main/results/Figure1/DiffAbundGenera/significant_genera_Consensus-and-log2FC.RDS")
+
+# make a gradient of concordance of significant genera between females and males
+
+males_genera_count_signif <- males_signif_genera %>% 
+  pivot_longer(cols = colnames(males_signif_genera)[-1], 
+               names_to = "method", 
+               values_to = "values") %>% 
+  filter(!is.na(values)) %>% 
+  group_by(taxon) %>% 
+  summarise(n_signif = n(),
+            mean_lfc = mean(values, na.rm = T)) %>% 
+  mutate(group = "Males Only")
+
+females_genera_count_signif <- females_signif_genera %>% 
+  pivot_longer(cols = colnames(females_signif_genera)[-1], 
+               names_to = "method", 
+               values_to = "values") %>% 
+  filter(!is.na(values)) %>% 
+  group_by(taxon) %>% 
+  summarise(n_signif = n(),
+            mean_lfc = mean(values, na.rm = T)) %>% 
+  mutate(group = "Females Only")
+
+model_paper_count_signif <- figure1_genera %>% 
+  pivot_longer(cols = colnames(figure1_genera)[-1], 
+               names_to = "method", 
+               values_to = "values") %>% 
+  filter(!is.na(values)) %>% 
+  group_by(taxon) %>% 
+  summarise(n_signif = n(),
+            mean_lfc = mean(values, na.rm = T)) %>% 
+  mutate(group = "Sex Adjusted")
+```
+
+```{r}
+data_unified_for_plot_males <- list(
+  males_genera_count_signif,
+  model_paper_count_signif
+)
+
+intersection_signif_taxa <- sapply(1:5, function(n) data_unified_for_plot_males %>% 
+                                     lapply(filter, n_signif >= n) %>% 
+                                     lapply("[[", "taxon") %>% 
+                                     purrr::reduce(intersect) %>% 
+                                     length()
+                                   
+)
+
+union_signif_taxa <- sapply(1:5, function(n) data_unified_for_plot_males %>% 
+                              lapply(filter, n_signif >= n) %>% 
+                              lapply("[[", "taxon") %>% 
+                              purrr::reduce(union) %>% 
+                              length()
+                            
+)
+
+intersection_vs_union_males <- data.frame(x = factor(paste0(1:5, "/5")), 
+                                          y = intersection_signif_taxa/union_signif_taxa*100) 
+
+###### same but for females
+
+data_unified_for_plot_females <- list(
+  females_genera_count_signif,
+  model_paper_count_signif
+)
+
+intersection_signif_taxa <- sapply(1:5, function(n) data_unified_for_plot_females %>% 
+                                     lapply(filter, n_signif >= n) %>% 
+                                     lapply("[[", "taxon") %>% 
+                                     purrr::reduce(intersect) %>% 
+                                     length()
+                                   
+)
+
+union_signif_taxa <- sapply(1:5, function(n) data_unified_for_plot_females %>% 
+                              lapply(filter, n_signif >= n) %>% 
+                              lapply("[[", "taxon") %>% 
+                              purrr::reduce(union) %>% 
+                              length()
+                            
+)
+
+intersection_vs_union_females <- data.frame(x = factor(paste0(1:5, "/5")), 
+                                            y = intersection_signif_taxa/union_signif_taxa*100)
+```
+
+```{r}
+data_unified_for_plot_all <- list(
+  "Males\nOnly" = males_genera_count_signif,
+  "Sex Adjusted" = model_paper_count_signif,
+  "Females\nOnly" = females_genera_count_signif
+  
+)
+
+venn_Diagr_signif_4of5 <- data_unified_for_plot_all %>% 
+  lapply(filter, n_signif >= 4) %>% 
+  lapply("[[", "taxon") %>% 
+  ggVennDiagram::ggVennDiagram(edge_size = 0)+ 
+  scale_x_continuous(expand = expansion(mult = .2))+
+  scale_fill_distiller(palette = "RdBu")+
+  scale_color_manual(values = rep("darkgray", 3))
+
+venn_Diagr_signif_4of5
+```
+
+**Supplementary Figure 5. Some genera are exclusively significant in sex-separated models, but are all found in the sex-adjusted significant genera.**  Venn diagram of the significant genera found in each of the three models. In all cases, the contrast chosen was Current/Never, adjusting for age and number of teeth. All significance thresholds were q-values < 0.05, all Benjamini-Hochberg (5% FDR) except for ALDEx2, which uses Holm correction.
+
+## Supplementary Figure 6 - Correlations log2 Fold Change values from Differential abundance and regression on daily smoking intensity
+
+```{r}
+
+q1_results <- readRDS("/home/gantonello/CHRISMB/PAPER_DRAFTS/smoking-paper-genus/Main/results/Figure1/DiffAbundGenera/significant_genera_Consensus-and-log2FC.RDS") %>% 
+  dplyr::filter(taxon %in% readRDS("/home/gantonello/CHRISMB/PAPER_DRAFTS/smoking-paper-genus/Main/results/Figure1/DiffAbundGenera/significant_genera_consensus.RDS")) %>% 
+  column_to_rownames("taxon") %>% 
+  rowMeans(na.rm = T) %>% 
+  as.data.frame() %>% 
+  rownames_to_column("Genus") %>% 
+  set_names(c("Genus", "Q1_log2FC"))
+
+q2_results <- readRDS("/home/gantonello/CHRISMB/PAPER_DRAFTS/smoking-paper-genus/Main/results/Figure2/deseq_smoking_regression_datafames.rds") %>% 
+  .$x0sm61_bin5cont %>% 
+  as.data.frame() %>% 
+  filter(padj < 0.05)
+
+data_for_plot <- inner_join(q1_results, q2_results, by = "Genus")
+
+
+############# actual plot and significance 
+
+pearson_rho <- cor.test(data_for_plot$Q1_log2FC, data_for_plot$log2FoldChange, method = "pearson")
+library(RColorBrewer)
+
+fig.A6 <- data_for_plot %>%
+  
+  ggplot(aes(x = log2FoldChange, y = Q1_log2FC, color = Phylum, shape = Phylum))+
+  geom_point(size = 2)+
+  geom_hline(yintercept = 0, lty = "dashed", color = "darkgray")+
+  geom_vline(xintercept = 0, lty = "dashed", color = "darkgray")+
+  labs(
+    y = "Eff. Sizes Smokers vs Non-Smokers (Differential Abundance)", 
+    x = "Eff. Sizes Daily Smoking Intensity (Regression)",
+    subtitle = paste("Pearson's rho:", round(pearson_rho$estimate, 3), "| P-value:", format(pearson_rho$p.value, scientific = TRUE, digits = 2)))+
+  scale_color_brewer(palette = "Dark2")
+
+
+ggsave(plot = fig.A6, 
+       filename = "appendix_results/A6/A6_eff_sizes_DESeq2_proportional.png",
+       width = 7, 
+       height = 5, 
+       dpi = 300
+)
+
+fig.A6
+
+```
+
+**Supplementary Figure 6. Scatterplot and correlation index between effect size estimates in the differential abundance contrasting Current over Never smokers and the effect size estimates for the regression of genera abundance in relation to the daily grams of tobacco smoked daily**. Both methods used DESeq2 regression correcting for age group, sex, number of teeth. However, in the comparison between Current and Never smokers, a contrast between factors was extracted (log2 Fold Change), in the second case the estimates were step-wise fold change estimates in response to increasing 5 grams smoked per day (0, 5, 10, ..., 30 g).
+
+## Supplementary Figure 7 - Correlation of differentially abundant pathways
+
+```{r}
+picrust_pathways_matrix <- data.table::fread("/home/gantonello/CHRISMB/PICRUSt2_prediction_v2.5/unstratified/picrust2_output/pathways_out/path_abun_unstrat_descrip.tsv.gz") %>%
+  dplyr::select(-pathway) %>%
+  column_to_rownames("description") %>%
+  as.matrix()
+
+picrust_pathways_matrix %<>% round(0)
+
+signif_pathways <- readRDS("../Main/results/Figure4/significant_PWYs_consensus.RDS")
+
+picrust_pathways_matrix_Q1 <- picrust_pathways_matrix[signif_pathways, sample_names(phy_Q1)]
+picrust_pathways_matrix_Q1%<>% apply(1, function(x) x/sum(x)) %>%
+  t()
+
+```
+
+```{r, include=FALSE}
+
+correl_mats <- list(r = cor(t(picrust_pathways_matrix_Q1), method = "spearman"),
+      p = corrplot::cor.mtest(t(picrust_pathways_matrix_Q1)))
+  
+```
+
+```{r, fig.height=10, fig.width=10}
+corrplot::corrplot(correl_mats$r,
+                   method = "color",
+                   type = "lower",
+                   tl.col = 'black',
+                   tl.srt = 45,
+                   p.mat = corrplot::cor.mtest(t(picrust_pathways_matrix_Q1))$p,
+                   sig.level = 0.05/21
+                   )
+
+```
+
+**Supplementary Figure 7. Correlation among pathways that were found differentially abundant in smokers compared to never smokers.** Pathways were transformed to relative abundance to account for compositionality, and a pairwise Spearman correlation matrix was calculated with the `Hmisc::rcorr` function, which additionally reports a P-value as indication of the strength of the correlation estimate. Blue circles are **positive** correlations, red circles are **negative** correlations. Larger circles mean a stronger correlation. Crossed-out slots are non-significant associations (p >= 0.01).
+
+## Supplementary Figure 8 - Gram staining relative abundances vs Smoking  habits
+
+```{r, height = 5, width = 6}
+
+gram <- read_tsv("https://raw.githubusercontent.com/g-antonello/CHRISMB-smoking-epidemiology/main/Appendix/appendix-input-data/gram_staining_table.tsv")
+
+taxtab <- as.data.frame(tax_table(phy_Q1)) %>% 
+  dplyr::select(ASV, Phylum)
+
+otu_tab <- phy_Q1 %>% 
+  phy_transform("compositional") %>% 
+  abundances() %>% 
+  as.data.frame() %>% 
+  rownames_to_column("ASV")
+
+tmp <- left_join(taxtab, gram, by = "Phylum") %>% 
+  left_join(otu_tab, by = "ASV") %>% 
+  dplyr::select(-ASV, -Phylum) %>% 
+  group_split(Gram) %>% 
+  set_names(c("Gram_neg", "Gram_pos")) %>% 
+  lapply(function(df) dplyr::select(df, -Gram)) %>% 
+  sapply(colSums) %>%
+  as.data.frame() %>%
+  rownames_to_column("sample_name")
+
+phy_Q1_gram <- phy_add_metadata_variables(physeq = phy_Q1, df = tmp, by = "sample_name") 
+
+signif <- 
+  phy_Q1_gram %>% 
+  meta() %>% 
+  dplyr::select(sample_name,x0sm51, Gram_pos, Gram_neg) %>% 
+  pivot_longer(cols = c("Gram_pos", "Gram_neg"), names_to =  "gram_staining") %>% 
+  
+  group_by(gram_staining) %>% 
+  rstatix::wilcox_test(value ~ x0sm51) %>% 
+  rstatix::adjust_pvalue(method = "BH") %>% 
+  rstatix::add_xy_position(x = "gram_staining",step.increase = 0.2, fun = "max") %>% 
+  filter(p.adj < 0.05)
+
+basic_plot <- phy_Q1_gram %>% 
+  meta() %>% 
+  dplyr::select(sample_name, x0sm51, Gram_pos, Gram_neg) %>% 
+  pivot_longer(cols = c("Gram_pos", "Gram_neg"), names_to =  "gram_staining") %>% 
+  mutate(gram_staining = ifelse(gram_staining == "Gram_pos", "Gram +", "Gram -")) %>% 
+  ggpubr::ggboxplot(x = "gram_staining", 
+                    y = "value", 
+                    fill = "x0sm51")+
+  theme_light()
+
+fig_A8 <- basic_plot + 
+  stat_pvalue_manual(signif, tip.length = 0.01)+
+  labs(
+    x = "Gram Staining",
+    y = "Relative abundance",
+    fill = "Smoking Habit")+
+  scale_fill_manual(values = ggsci::pal_jco()(4)[c(1,2,4,3)])
+
+
+ggsave(plot = fig_A8,
+       filename = "appendix_results/A8/A8_gram_staining_vs_smokers.png",
+       height = 5, 
+       width = 7,
+       dpi = 300
+)
+
+fig_A8
+
+```
+
+**Supplementary Figure 8 - Gram Positive bacteria are more abundant in the saliva of smokers, regardless of reduction.** Phyla were annotated based on a manually curated table made by G.A., since Gram staining generally differentiates at phylum level. The results were presented like the oxygen metabolism on Figure 1 (Main Text) and Supplementary Figure 6-B.
+
+
+## Supplementary Figure 9 - Current (NR) are indistinguishable from Current (R)
+
+```{r, include=FALSE}
+
+phy_Q1_A3 <- phy_tax_glom(phy_Q1, level = "Genus") %>% 
+  filter_sample_data(smoking_exposure_ga == "Current") %>% 
+  mutate_sample_data(x0sm51 = droplevels(x0sm51))
+
+div <- phyloseq::distance(microbiome::transform(phy_Q1_A3, "compositional"), "bray")
+
+ord <- ordinate(physeq = phy_Q1_A3,
+                distance = div,
+                method = "PCoA"
+)
+
+fig1A <- plot_ordination(physeq = phy_Q1_A3,
+                         ordination = ord, 
+                         color = "x0sm51")+ 
+  labs(title = NULL)+
+  theme_light()+
+  theme(legend.position = "bottom")+ 
+  scale_color_discrete(name = "Smoking habit",type = ggsci::pal_jco("default")(2))+ 
+  stat_ellipse(aes(group = x0sm51), show.legend = FALSE)+
+  guides(color = guide_legend(override.aes = list(size=3)))
+
+fig1A$labels$caption <- gsub(fig1A$labels$caption, pattern = "\n", replacement = "; ")
+fig1A$labels$x <- paste0("Pr. Coord. 1   ", strsplit(fig1A$labels$x, "   ")[[1]][[2]])
+fig1A$labels$y <- paste0("Pr. Coord. 2   ", strsplit(fig1A$labels$y, "   ")[[1]][[2]])
+
+###################################################################################
+# Fig 1 B
+# oxygen 3 plots
+library(rstatix)
+df_final <- readRDS("../Main/results/Figure1/OxygenMetabolism/oxygen_with_metadata_df.RDS") %>% 
+  mutate(
+    oxygen = case_when(
+      grepl("Facultative", oxygen) ~ "Facultative\nAnaerobic",
+         TRUE ~ oxygen) %>% 
+      factor(levels = c("Aerobic", "Anaerobic", "Facultative\nAnaerobic"))
+    ) 
+
+stat_to_plot <- filter(df_final, oxygen != "NA", smoking_exposure_ga == "Current")%>%
+  group_by(oxygen) %>%
+  rstatix::wilcox_test(value ~ x0sm51) %>%
+  adjust_pvalue(method = "BH") %>%
+  #add_significance("p.adj") %>%
+  add_xy_position(x = "oxygen", step.increase = 0.05) # this step takes the longest
+
+fig1C <- ggboxplot(data = filter(df_final, oxygen != "NA", smoking_exposure_ga == "Current"),
+                   x = "oxygen", 
+                   y = "value", 
+                   fill = "x0sm51") + 
+  ylab("") + 
+  xlab("") + 
+  scale_fill_discrete(name = "Smoking habit", 
+                      type = ggsci::pal_jco()(4)) + 
+  theme(legend.position = "top") +
+  stat_pvalue_manual(stat_to_plot, label =  "p.adj", tip.length = 0.01) + 
+  labs(caption = "Benjamini-Hochberg FDR (5%) adjusted Wilcoxon test q-values")+ 
+  theme_light()+
+  theme(legend.position = "none")
+
+fig1C
+
+```
+
+```{r, fig.align='center'}
+## Diff abund 1: DESeq2
+library(DESeq2)
+#############################################################################
+
+deseq_object_genus <-
+  phyloseq_to_deseq2(phy_Q1_A3, design = ~ x0_sex + x0_ager_cat + x0oh01 + x0sm51)
+
+geom_means <- apply(counts(deseq_object_genus), 1, function(x) exp(mean(log(x[x>0]))))
+
+# estimate size factors, important to account for library size variations
+estim_size <- estimateSizeFactors(deseq_object_genus, geoMeans = geom_means)
+
+# compute the DESeq2 glm, accounting for the estimate size factor and geometric means
+
+deseq2_results_genus <- DESeq(estim_size, fitType = "local")
+
+figA3_diffAbund_DESeq2 <- results(deseq2_results_genus, c("x0sm51", "Current (R)", "Current (NR)")) %>% 
+  as.data.frame() %>% 
+  arrange(padj)
+
+```
+
+
+```{r, include=FALSE}
+## Diff abund 2: LinDA
+
+#devtools::install_github("zhouhj1994/LinDA")
+library(LinDA)
+
+LinDA_model_genera <- linda(otu.tab = abundances(phy_Q1_A3),
+                   meta = meta(phy_Q1_A3), 
+                   formula =  "~ x0_sex + x0_ager_cat + x0oh01 + x0sm51", 
+                   alpha = 0.05,
+                   prev.cut = 0.01, 
+                   lib.cut = 1000, 
+                   winsor.quan = 0.97,
+                   adaptive = T)
+
+```
+
+```{r, include=FALSE}
+## Diff abund 3: Maaslin2
+dir.create("appendix_results/A3/Maaslin2_DA/", showWarnings = FALSE, recursive = T)
+
+
+if(!file.exists("appendix_results/A3/Maaslin2_DA/significant_results.tsv")){
+  
+  library(Maaslin2)
+  
+ # older normaliz and so on 
+  # Maaslin2(
+  #   input_data = picrust_taxa_matrix_Q1, 
+  #   input_metadata = phy_Q1_meta, 
+  #   output = "appendix_results/Maaslin2_DA", 
+  #   analysis_method = "LM",
+  #   fixed_effects = c("age_cat", "sex", "x0oh01", "x0sm51"),
+  #   reference = c("x0sm51, Never"),
+  #   transform = "LOG",
+  #   normalization = "TMM",
+  #   correction = "BH",
+  #   plot_heatmap = F
+  # )
+
+  # these following are the same settings used by Nearing  et al. (2021) 
+  capture.output(Maaslin2(
+    input_data = abundances(phy_Q1_A3), 
+    input_metadata = meta(phy_Q1_A3), 
+    output = "appendix_results/A3/Maaslin2_DA/", 
+    analysis_method = "LM",
+    fixed_effects = c("x0_sex", "x0_ager_cat", "x0oh01","x0sm51"),
+    reference = c("x0sm51", "Current (R)"),
+    transform = "LOG",
+    normalization = "TSS",
+    correction = "BH",
+    standardize = FALSE,
+    plot_heatmap = F,
+    plot_scatter = F
+  ), file = "appendix_results/A3/Maaslin2_DA/log.txt"
+  )
+
+}
+
+genera_names_map_all <- as.data.frame(tax_table(phy_Q1_A3))["Genus"] %>% 
+  mutate(feature = make.names(Genus))
+
+maaslin_results_genera <- read_tsv("appendix_results/A3/Maaslin2_DA/significant_results.tsv") %>% 
+  left_join(genera_names_map_all, by = "feature") %>% 
+  mutate(feature = Genus) %>% 
+  dplyr::select(-Genus)
+
+
+```
+
+
+
+```{r, include=FALSE, cache=TRUE}
+## Diff abund 4: ALDEx2 (glm)
+library(ALDEx2)
+
+# define model matrix, based on the metadata
+model_mtx <-
+  model.matrix(
+    ~ x0_sex + x0_ager_cat + x0oh01 + x0sm51,
+    data = dplyr::select(meta(phy_Q1_A3),
+                         x0oh01,
+                         x0_sex,
+                         x0_ager_cat,
+                         x0sm51)
+  )
+# perform the clr differential abundance
+aldex.glm.genera_smoking_ga <-
+  aldex.clr(
+    abundances(phy_Q1_A3),
+    model_mtx,
+    mc.samples = 200,
+    denom = "all",
+    useMC = F
+  )
+
+# make glm, obtain significance of terms
+glm.test_genera_smoking_ga <-
+  aldex.glm(aldex.glm.genera_smoking_ga, model_mtx)
+
+```
+
+
+
+```{r}
+## Diff abund 5: ANCOM-BC
+tmp <- mia::makeTreeSummarizedExperimentFromPhyloseq(phy_Q1_A3 %>% select_sample_data(x0_sex, x0_ager_cat, x0oh01, x0sm51)) 
+
+library(ANCOMBC)
+
+# takes around 30 minutes
+ancom_results <- ancombc2(data = tmp,
+        assay_name = "counts", 
+        tax_level = NULL,
+        fix_formula = "x0_sex + x0_ager_cat + x0oh01 + x0sm51", 
+        group = "x0sm51",
+        struc_zero = TRUE,
+        iter_control = list(tol = 1e-5, max_iter = 20, verbose = FALSE),
+        em_control = list(tol = 1e-5, max_iter = 20),  
+        p_adj_method = "BH",
+        n_cl = 1,
+        alpha = 0.05)
+
+```
+
+```{r, include=FALSE}
+
+library(DESeq2)
+
+# DESeq2
+deseq2_signif_results <- figA3_diffAbund_DESeq2 %>% 
+  as.data.frame() %>% 
+  rownames_to_column("taxon") %>% 
+  filter(padj < 0.05)
+
+# LinDA
+LinDAresults_taxon_signif_Current <- LinDA_model_genera$output$`x0sm51Current (NR)` %>% 
+  filter(padj < 0.05, 
+         #abs(log2FoldChange) > 0.5
+         ) %>% 
+  rownames_to_column("taxon")
+
+# MaAsLin2
+maaslin_signif <- maaslin_results_genera %>% 
+  filter(metadata == "x0sm51") %>% 
+  dplyr::select(feature, value, coef, stderr, pval, qval, N.not.0) %>% 
+  filter(qval < 0.05, 
+         #abs(coef) > 0.5, 
+         value == "Current")
+
+# ALDEx2
+aldex_glm_smoking_signif <- glm.test_genera_smoking_ga %>% 
+  as.data.frame() %>% 
+  dplyr::select(contains("x0sm51Current")) %>% 
+  dplyr::rename_all(.funs = function(x) gsub(pattern =  ".*\\:", replacement = "", x = x)) %>% 
+  rownames_to_column("taxon") %>% 
+  as_tibble() %>% 
+  filter(
+    #abs(Est) > 0.5, 
+    pval.holm < 0.05)
+  
+# ANCOM-BC
+
+ancom2_signif_results <- ancom_results$res %>% 
+  filter(
+    #abs(log2FoldChange) > 0.5,
+    `q_x0sm51Current (NR)` < 0.05
+    )
+
+tableDA.Taxa_A3 <- cbind(c("DESeq2", "LinDA", "MaAsLin2", "ALDEx2", "ANCOM-BC"),
+                         c(nrow(deseq2_signif_results), nrow(LinDAresults_taxon_signif_Current), nrow(maaslin_signif), nrow(aldex_glm_smoking_signif), nrow(ancom2_signif_results))) %>% 
+  set_colnames(c("Diff. Abund Method", "N significant Taxa"))
+
+```
+
+
+```{r, fig.height=7, fig.width=7}
+A9_plot <- ggarrange(
+  ggarrange(fig1A, fig1C+ labs(caption = NULL) + ylim(c(0, 1)), ncol = 2, nrow = 1, labels = LETTERS[1:2], common.legend = T),  
+  ggplot(
+    tableDA.Taxa_A3 %>% as.data.frame(),
+    aes(
+      x  = `Diff. Abund Method`,
+      label = `N significant Taxa`,
+      y = as.numeric(`N significant Taxa`) + 0.05
+    )
+  ) + geom_col() + 
+    geom_text(aes(y = as.numeric(`N significant Taxa`) + 0.4), color = "gray15")+
+    labs(
+      y = "N° Significant Taxa",
+      x = "Differential Abundance Method"
+    ),
+  
+  
+  nrow = 2, ncol = 1, 
+  heights = c(1.3, 1), labels = c("", "C")
+  )
+
+ggsave(plot = A9_plot, 
+       filename = "appendix_results/A9/A9_smokers_indistinguishable.png", 
+       width = 8, 
+       height = 8, 
+       dpi = 300)
+
+A9_plot
+```
+
+**Supplementary Figure 9. Current smokers who reduced daily smoking in the past, Current (R), are indistinguishable from Current smokers who never reduced daily smoking, Current (NR)**
+(A) Bray-Curtis distance based Principal Cordinate Analysis (PCoA) of the first 2 axes. Ellipses were drawn after the 95% confidence interval of the area covered by each smoker group. (B) Relative abundance of aerobes, anaerobes, and facultative anaerobes in Current (R) and Current (NR) smokers. Statistical significance was calculated with pairwise Wilcoxon test adjusting p-values (q-values) for a 5% FDR with the Benjamini-Hochberg method (** q < 0.05; *** q < 0.001, **** q < 0.0001). (C) Barplot of the number of differentially abundant taxa in the $\frac{Current (NR)}{Current (R)}$ contrast using 5 different methods (See main text for the methods). Each method considered a significant results if Benjamini-Hochberg corrected q-values were lower than 0.05, at a False Discovery Rate of 0.05, the only exception was ALDEx2, which implements only Holm's correction. 
+
+## Supplementary Figure 10 - Histogram of grams per day in current smokers
+
+```{r}
+A10_plot <- phy_Q1_meta %>% 
+  filter(smoking_exposure_ga == "Current") %>% 
+  ggplot(aes(x = x0sm61))+
+  geom_histogram()+
+  labs(
+    y = "Counts",
+    x = "Grams of tobacco smoked per day"
+  )
+
+ggsave(
+  plot = A10_plot, 
+  filename = "appendix_results/A10/A10_histogram of smoking intensity values.png", 
+  height = 5,
+  width = 7,
+  dpi = 300
+)
+
+A10_plot
+
+```
+
+**Supplementary Figure 10. Histogram of grams of tobacco smoked per day by CHRISMB smokers (N = 309)** Tobacco is an integration of cigarettes, cigars, cigarillos and pipe. However, except 5 participants, all smokers were exclusively cigarette smokers. The participant who declared smoking 60 cigarettes (~ 60 grams) per day was included in this graph for completeness, but excluded from the analysis.
+
+
+
+\newpage
+
+
+
+# Supplementary Tables
+
+## Supplementary Table 1 - Literature overview, table of ethnicities and sample size of studies
+
+**Supplementary Table 1. High-level comparison of studies with comparable design** Only studies investigating cigarette smoking association with the salivary microbiota and 16S amplicon sequencing technology were included.
+
+```{r, results="asis"}
+
+tab.A1 <- read_tsv("https://raw.githubusercontent.com/g-antonello/CHRISMB-smoking-epidemiology/main/Appendix/appendix-input-data/Table%20A1%20-%20literature%20ethnicities%20and%20sample%20sizes.tsv") %>% 
+  mutate(Reference = gsub(pattern = "al.,", replacement = "al.", x = Reference, fixed = T) %>% gsub("\\(|\\)", "", .),
+         Reference = paste0("[", Reference, "]", "(", DOI, ")")) %>% 
+  dplyr::select(-DOI)
+
+# thank you for this: https://www.r-bloggers.com/2023/03/little-useless-useful-r-functions-transforming-dataframe-to-markdown-table/
+
+df_2_MD <- function(your_df){
+  cn <- names(your_df)
+  headr <- paste0(c("", cn),  sep = "**|**", collapse='')
+  headr <- gsub("^\\*\\*|\\*\\*$", "", headr)
+  sepr <- paste0(c('|', rep(paste0(c(rep('-',3), "|"), collapse=''),length(cn))), collapse ='')
+  st <- "|"
+    for (i in 1:nrow(your_df)){
+      for(j in 1:ncol(your_df)){
+        if (j%%ncol(your_df) == 0) {
+          st <- paste0(st, as.character(your_df[i,j]), "|", "\n", "" , "|", collapse = '')
+        } else {
+        st <- paste0(st, as.character(your_df[i,j]), "|", collapse = '')
+        }
+      }
+    }
+  fin <- paste0(c(headr, sepr, substr(st,1,nchar(st)-1)), collapse="\n")
+  cat(fin)
+}  
+
+df_2_MD(tab.A1)
+```
+
+## Supplementary Table 2 - Available samples after each exclusion step
+
+```{r, results="asis"}
+
+col1 <- c(
+  
+  "Missing Smoking Status",
+  "Missing Number of Teeth",
+  "Missing Antibiotic Usage Information",
+  "Took Antibiotics in the last 3 months"
+)
+
+col3 <- c( 
+  
+  chrismb_phy_core %>% 
+    filter_sample_data(!is.na(x0sm51)) %>% 
+    nsamples(),
+  
+  chrismb_phy_core %>% 
+    filter_sample_data(
+      !is.na(x0sm51),
+      !is.na(x0oh01)) %>% 
+    nsamples(),
+  
+  chrismb_phy_core %>% 
+    filter_sample_data(
+      !is.na(x0sm51),
+      !is.na(x0oh01),
+      !is.na(x0dd51)
+    ) %>% 
+    nsamples(),
+  
+  chrismb_phy_core %>% 
+    filter_sample_data(
+      !is.na(x0sm51),
+      !is.na(x0oh01),
+      !is.na(x0dd51),
+      x0dd51 != "Yes"
+    ) %>% 
+    nsamples()
+) 
+
+col2 <- abs(diff(c(nsamples(chrismb_phy_core), col3)))
+
+matrix_table_samples_excluded <- cbind(
+  col1, 
+  col2, 
+  col3
+) %>% 
+  set_colnames(c("Criterion", "Samples Excluded (N)", "Samples after exclusion (N)"))
+
+
+kbl(matrix_table_samples_excluded, format = "latex", booktabs = T) %>% 
+  kable_styling(latex_options = "HOLD_position") %>% 
+  row_spec(0, bold = T) %>% 
+  cat()
+```
+
+\newpage
+
+## Supplementary Table 3 - No statistical differences between excluded and included participants for the study
+
+**Supplementary Table 3. Statistical differences between excluded and included participants in the study.** Significance (p-value column) was calculated as Welch's t-test for continuous variables, Fisher exact test for 2x2 comparisons, and Pearson's Chi squared test for multiclass factors. Abbreviations used: BP = Blood pressure; BMI = Body Mass Index.
+
+```{r, results="asis"}
+
+df <- chrismb_phy %>% 
+  meta() %>% 
+  mutate(included = 
+           case_when(AID %in% meta(phy_Q1)[["AID"]] ~ 'included', TRUE ~ 'excluded')
+  )
+#, then use gtsummary to do a summary table by your variables of interest, i.e. 
+
+library(gtsummary)
+
+
+tbl <- df %>% 
+  dplyr::select(any_of(c("x0sm51", "x0dd51", "x0bp01", "x0bp02", "x0an03a", "x0oh01", "x0oh02b", "included"))) %>% 
+  set_names(c("Smoking Habit", "Antibiotics Usage", "Systolic BP", "Diastolic BP", "BMI", "N° Teeth", "Gum Health (self-assessed)", "included")) %>% 
+  tbl_summary(by=included, statistic = list(all_continuous()~"{mean} ({sd})")) %>%
+  add_p(test=list(all_continuous() ~ "t.test"))  %>%
+  as_kable_extra(format = "latex", booktabs = T) %>% 
+  kable_styling(latex_options = "HOLD_position")  %>% 
+  row_spec(0, bold = T)
+
+cat(tbl)
+```
+
+\newpage 
+
+## Supplementary Table 4 - Per taxonomic level microbiota statistics
+
+**Supplementary Table 4. CHRISMB total reads and total taxonomic ranks before and after filtering by prevalence and detection with the function 'microbiome::core'.**
+  
+```{r, echo=FALSE, results='asis'}
+
+tax_lvls <- colnames(chrismb_phy@tax_table) 
+
+tmp <- rbind(c("-|-", paste(threshold_prevalence,threshold_detection, sep = "|")),
+             c(format(sum(sample_sums(chrismb_phy)), scientific = T,digits = 3),format(sum(sample_sums(chrismb_phy_core)), scientific = T,digits = 3)),
+             cbind(sapply(tax_lvls,
+                          function(lvl)
+                            tryCatch(ntaxa(tax_glom(chrismb_phy, lvl)), error = function(e) return(0))),
+                   sapply(tax_lvls,
+                          function(lvl)
+                            tryCatch(ntaxa(tax_glom(chrismb_phy_core, lvl)), error = function(e) return(0)))
+             ))
+
+tmp_final <-tmp %>% 
+  set_rownames(c(
+  "Thresholds of Prevalence|Detection",
+  "Number of Reads",
+  tax_lvls)) %>% 
+  set_colnames(c("Unfiltered", "Filtered"))
+
+kbl(tmp_final, format = "latex", booktabs = T) %>% 
+  kable_styling(latex_options = "HOLD_position") %>% 
+  row_spec(0, bold = T)
+```
+
+## Supplementary Table 5 - PERMANOVA table of variables included in the models (marginal effect)
+
+```{r, include = FALSE, cache=TRUE}
+distance_bray <- phyloseq::distance(phy_Q1_genus %>% phy_transform("compositional"), "bray")
+
+library(vegan)
+
+betadisper_smoking_bray <- betadisper(distance_bray, group = phy_Q1@sam_data$smoking_exposure_ga)
+
+betadisper_smoking_bray_permutest <-  permutest(betadisper_smoking_bray, 2000) # tukey post-hoc test
+
+permanova_smoking_bray <- adonis2(distance_bray ~ x0oh01 + x0_sex + x0_ager_cat + smoking_exposure_ga, data = meta(phy_Q1), by = "margin", permutations = 2000)
+```
+
+
+**Supplementary Table 5. Permutational (x2000) Multivariate Analysis of variance (PERMANOVA) of the marginal effect of age, sex, smoking and number of teeth in the compositional variability of the microbiota.** Interindividual microbiota-based dissimilarity was calculated with the Bray-Curtis method on counts transformed to relative abundances (Total Sum Scaling, ranging from 0 to 1). The Beta dispersity (Tuckey post-hoc test significance) was P = 0.126.
+
+```{r}
+as.data.frame(permanova_smoking_bray) %>% 
+  set_rownames(c("Number of Teeth", "Sex", "Age Category", "Smoking habits (3 cat)", "Residuals", "Total")) %>% 
+  mutate(R2 = R2*100) %>% 
+  set_colnames(c("Deg.Freedom", "SumOfSquares", "R2 (%)", "F-stat", "P-value")) %>%
+  rownames_to_column("Term") %>% 
+  mutate_if(is.numeric, .funs = function(x)
+    ifelse(x < 0.001, 
+           yes = format(x, digits= 2, scientific = T),
+           no = round(x, 1))
+  ) %>% 
+  kbl(format = "latex", booktabs = T) %>% 
+  kable_styling(latex_options = "HOLD_position") %>% 
+  row_spec(0, bold = T)
+```
+
+\newpage
+
+## Supplementary Table 6 - Linear model aerobes against smoking intensity per day
+
+**Supplementary Table 6. The relative abundance of AEROBIC bacteria decreases with increasing grams of tobacco smoked in a day.** The trend is true up to 10 g/day, after which a plateau is reached.
+
+```{r}
+
+oxygen_molten_metadata <- readRDS("../Main/results/Figure1/OxygenMetabolism/oxygen_with_metadata_df.RDS")
+
+filter(
+  oxygen_molten_metadata,
+  oxygen == "Aerobic",
+  smoking_exposure_ga == "Current",
+  !is.na(x0sm61),
+  x0sm61 < 60
+) %>% 
+  lm(value ~ I(1/x0sm61) + x0_ager + x0_sex + x0oh01, data = .) %>% 
+  summary() %>% 
+  broom::tidy() %>%
+  mutate(term = c("Intercept", "1/tobacco exposure intensity (g/day)", "Age", "Sex", "1-9 teeth", "10-19 teeth", "20+ teeth")) %>% 
+  kbl(digits = 3, format = "latex", booktabs = T) %>% 
+  kable_styling(latex_options = "HOLD_position") %>% 
+  row_spec(0, bold = T)
+
+```
+
+## Supplementary Table 7 - Linear model anaerobes against smoking intensity per day
+
+**Supplementary Table 7. The relative abundance of ANAEROBIC bacteria decreases with increasing grams of tobacco smoked per day.** The trend is true up to 10 g/day, after which a plateau is reached.
+
+```{r}
+
+oxygen_molten_metadata <- readRDS("../Main/results/Figure1/OxygenMetabolism/oxygen_with_metadata_df.RDS")
+
+filter(
+  oxygen_molten_metadata,
+  oxygen == "Anaerobic",
+  smoking_exposure_ga == "Current",
+  !is.na(x0sm61),
+  x0sm61 < 60
+) %>% 
+  lm(value ~ I(1/x0sm61) + x0_ager + x0_sex + x0oh01, data = .) %>% 
+  summary() %>% 
+  broom::tidy() %>%
+  mutate(term = c("Intercept", "1/tobacco exposure intensity (g/day)", "Age", "Sex", "1-9 teeth", "10-19 teeth", "20+ teeth")) %>% 
+  kbl(digits = 3, format = "latex", booktabs = T) %>% 
+  kable_styling(latex_options = "HOLD_position") %>% 
+  row_spec(0, bold = T)
+
+```
+
+## Supplementary Table 8 - Linear model aerobes against years since smoking cessation
+
+**Supplementary Table 8. The relative abundance of AEROBIC bacteria increases with increasing years since smoking cessation.** The trend reaches a plateau after 20 years, it is no longer statistically associated (data not shown)
+
+```{r}
+filter(
+  oxygen_molten_metadata,
+  oxygen == "Aerobic",
+  smoking_exposure_ga == "Former",
+  x0sm40 >= x0sm34, # meaning: (age when they quit) >= (age when they started)
+  years_since_quitting_or_reducing <= 20) %>% 
+  lm(value ~ years_since_quitting_or_reducing + x0_ager + x0_sex + x0oh01, data = .) %>% 
+  summary() %>% 
+  broom::tidy() %>%
+  mutate(term = c("Intercept", "Years since quitting", "Age", "Sex", "1-9 teeth", "10-19 teeth", "20+ teeth")) %>% 
+  kbl(digits = 3, format = "latex", booktabs = T) %>% 
+  kable_styling(latex_options = "HOLD_position") %>% 
+  row_spec(0, bold = T)
+```
+
+\newpage
+
+## Supplementary Table 9 - Linear model anaerobes against years since smoking cessation
+
+**Supplementary Table 9. The relative abundance of ANAEROBIC bacteria increases with increasing years since smoking cessation.** The trend reaches a plateau after 20 years, it is no longer statistically associated (data not shown)
+
+```{r}
+filter(
+  oxygen_molten_metadata,
+  oxygen == "Aerobic",
+  smoking_exposure_ga == "Former",
+  x0sm40 >= x0sm34, # meaning: (age when they quit) >= (age when they started)
+  years_since_quitting_or_reducing <= 20) %>% 
+  lm(value ~ years_since_quitting_or_reducing + x0_ager + x0_sex + x0oh01, data = .) %>% 
+  summary() %>% 
+  broom::tidy() %>%
+  mutate(term = c("Intercept", "Years since quitting", "Age", "Sex", "1-9 teeth", "10-19 teeth", "20+ teeth")) %>% 
+  kbl(digits = 3, format = "latex", booktabs = T) %>% 
+  kable_styling(latex_options = "HOLD_position") %>% 
+  row_spec(0, bold = T)
+```
+
+## Supplementary Table 10 - Table 1 with Current smokers split into reducers and non-reducers
+
+**Supplementary Table 10. Demographics of CHRISMB cohort, in South Tyrol, Italy, with respect to smoking habit.** Per-column percentages were also reported in brackets. Current smokers were separated into smokers who reduced daily smoking dosage some time in the past - Current (R), and those who did not reduce - Current (NR). The whole cohort is included under the “CHRISMB” column. Significance is calculated as X² test for categorical variables"
+
+```{r, results='asis'}
+
+tbl1 <- phy_Q1_meta %>% 
+  # do some renaming, just for the Table output
+  dplyr::rename(
+    Sex = x0_sex,
+    `Age Category (years)` = x0_ager_cat, 
+    `N° Teeth (self-reported)` = x0oh01, 
+    `Gums Health (self-reported)` = x0oh02b
+  ) %>% 
+  # pipe this temporary data into the table 1
+  table1(~ Sex + `Age Category (years)` + `N° Teeth (self-reported)` + `Gums Health (self-reported)`| x0sm51, 
+         data = ., 
+         extra.col = list("X² p-value" = table1.pvalues),
+         overall = "CHRISMB"
+  ) %>% 
+  table1::t1kable(format = "latex")
+
+cat(tbl1)
+```
+
+## Supplementary Table 11 - eHOMD database expansion, list of genomes accession numbers per species
+
+**Supplementary Table 11. Genome accession numbers (NCBI codes) for each species added to the eHOMD reference database.** The 16S rRNA genes of each genome were added to the locally downloaded extended Human Oral Microbiome Database (eHOMD) in order to maximize the likelihood of species level taxonomic assignment.
+
+```{r, results="asis"}
+
+tableS2 <- read_tsv("https://raw.githubusercontent.com/g-antonello/CHRISMB-smoking-epidemiology/main/Appendix/appendix-input-data/extra_eHOMD_reference_sequences.tsv") %>% 
+  set_names(c("Species", "NCBI Reference Sequences")) 
+
+kbl(tableS2, format = "latex") %>% 
+  kable_styling(latex_options = "HOLD_position") %>% 
+  row_spec(0, bold = T) %>% 
+  column_spec(1, italic = T) %>% 
+  column_spec(2, width = "10cm")
+
+```
+
